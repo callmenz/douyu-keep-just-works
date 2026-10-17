@@ -364,9 +364,7 @@ const {
 }
 .cookie-value.ok{color:#3ddc84}
 .cookie-value.fail{color:#ff6b6b}
-@media (max-width:900px){
-  .cookie-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
-}
+
 .push-summary-grid{
   display:grid;
   gap:12px;
@@ -405,5 +403,12 @@ const {
 }
 @media (max-width:900px){
   .push-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .cookie-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
+}
+@media (max-width:560px){
+  .push-summary-grid,
+  .cookie-grid{grid-template-columns:1fr;}
+  .push-summary-value{font-size:22px;}
+  .push-report-table .ellipsis-cell{max-width:160px;}
 }
 </style>

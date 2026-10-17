@@ -1,7 +1,9 @@
 .table-shell{
   overflow:auto;
   max-width:100%;
+  min-width:0;
   scrollbar-gutter:stable both-edges;
+  /* 窄屏去掉两侧 gutter，避免白白占掉 12px 可用宽度 */
 }
 .table{
   width:100%;
