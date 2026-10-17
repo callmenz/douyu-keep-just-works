@@ -1,5 +1,6 @@
 import { getFollowedYubaStatusesWithDyToken } from '../core/yuba'
 import type { CookieDiagnostics, DockerConfig, DoubleCardConfig, EffectiveCookiePreview, ExpiringGiftConfig, Fans, FansStatusResponse, JobConfig, LoginCookiesConfig, PassportQrLoginPublicStatus, PushReportSnapshot, YubaStatusResponse } from '../core/types'
+import type { WebPasswordStore } from './auth-password'
 import { assertDockerConfigCrons } from './cron'
 import { buildConfigWithPartialUpdate } from './config-store'
 import type { DockerConfigUpdate } from './config-store'
@@ -15,7 +16,7 @@ import type { TaskType } from './task-metadata'
 type TaskStatusMap = Record<TaskType, JobStatus>
 
 interface DockerRuntimeAppContextDeps {
-  webPassword: string
+  passwordStore: WebPasswordStore
   getCurrentConfig: () => DockerConfig | null
   getConfigPath: () => string
   setCurrentConfig: (config: DockerConfig) => void
@@ -72,7 +73,7 @@ function needsFansSync(config: DockerConfigUpdate): boolean {
 
 export function createRuntimeAppContext(deps: DockerRuntimeAppContextDeps): AppContext {
   return {
-    webPassword: deps.webPassword,
+    passwordStore: deps.passwordStore,
     getConfig: () => deps.getCurrentConfig(),
     saveCookie: (cookies: Pick<LoginCookiesConfig, 'main' | 'yuba'>) => {
       const currentLoginCookies = deps.getCurrentConfig()?.loginCookies

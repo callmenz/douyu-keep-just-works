@@ -1,7 +1,9 @@
+import * as path from 'node:path'
 import process from 'node:process'
 import { errorMessage } from '../core/errors'
 import { createDefaultDockerConfig } from '../core/config-normalization'
 import type { DockerConfig } from '../core/types'
+import { WebPasswordStore } from './auth-password'
 import { loadConfigFromDisk, saveConfigToDisk } from './config-store'
 import { createLogger } from './logger'
 import { createServer } from './server'
@@ -110,6 +112,12 @@ export interface DockerRuntimeOptions {
 export function startDockerRuntime(options: DockerRuntimeOptions): void {
   const { configPath, webPassword, webPort } = options
   activeConfigPath = configPath
+
+  // 密码存储：config/auth.json 优先（界面改过），否则回退 WEB_PASSWORD
+  const passwordStore = new WebPasswordStore({
+    filePath: path.join(path.dirname(path.resolve(configPath)), 'auth.json'),
+    initialPassword: webPassword,
+  })
   logSystem('斗鱼粉丝牌续牌 Docker 版启动')
 
   try {
@@ -129,7 +137,7 @@ export function startDockerRuntime(options: DockerRuntimeOptions): void {
   }
 
   const ctx = createRuntimeAppContext({
-    webPassword,
+    passwordStore,
     getCurrentConfig: () => currentConfig,
     getConfigPath: () => activeConfigPath,
     setCurrentConfig: (config) => {

@@ -1,10 +1,26 @@
 <script setup lang="ts">
+import { onMounted, ref } from 'vue'
+import { requestJson } from '../request'
+
 defineProps<{
   appName: string
   loginError: string
   password: string
   submittingLogin: boolean
 }>()
+
+// 密码提示：未登录也能读，默认折叠，点开才显示
+const hint = ref('')
+const hintOpen = ref(false)
+
+onMounted(async () => {
+  try {
+    const res = await requestJson<{ hint?: string }>('/api/auth/hint', { errorToast: false })
+    hint.value = (res?.hint || '').trim()
+  } catch {
+    // 没有提示或接口不可用时静默，不影响登录
+  }
+})
 
 const emit = defineEmits<{
   submit: []
@@ -44,6 +60,24 @@ function updatePassword(event: Event): void {
               @input="updatePassword"
             >
           </div>
+          <div v-if="hint" class="auth-hint">
+            <button
+              class="auth-hint-toggle"
+              type="button"
+              :aria-expanded="hintOpen ? 'true' : 'false'"
+              aria-controls="login-hint"
+              @click="hintOpen = !hintOpen"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" :class="{ 'auth-hint-chevron-open': hintOpen }">
+                <path d="M9.29 6.71a1 1 0 0 1 1.42 0l5 5a1 1 0 0 1 0 1.42l-5 5a1 1 0 0 1-1.42-1.42L13.59 12 9.29 8.12a1 1 0 0 1 0-1.41z" />
+              </svg>
+              忘记密码？查看密码提示
+            </button>
+            <div v-show="hintOpen" id="login-hint" class="auth-hint-text" role="status">
+              {{ hint }}
+            </div>
+          </div>
+
           <div v-if="loginError" id="login-error" class="auth-error" role="alert">
             {{ loginError }}
           </div>

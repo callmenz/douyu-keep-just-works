@@ -1,4 +1,5 @@
 import type { CookieDiagnostics, DockerConfig, EffectiveCookiePreview, Fans, FansStatusResponse, LoginCookiesConfig, PassportQrLoginPublicStatus, PushReportSnapshot, YubaStatusResponse } from '../core/types'
+import type { WebPasswordStore } from './auth-password'
 import type { DockerConfigUpdate } from './config-store'
 import type { LogEntry } from './logger'
 import type { TaskType } from './task-metadata'
@@ -14,7 +15,8 @@ export interface CacheRefreshOptions {
 }
 
 export interface AppContext {
-  webPassword: string
+  /** WebUI 登录密码存储（改密后立即生效，落盘 config/auth.json） */
+  passwordStore: WebPasswordStore
   getConfig(): DockerConfig | null
   saveCookie(cookies: Pick<LoginCookiesConfig, 'main' | 'yuba'>): void
   saveTaskConfig(config: DockerConfigUpdate): Promise<{ config: DockerConfig; fans: Fans[] }>
