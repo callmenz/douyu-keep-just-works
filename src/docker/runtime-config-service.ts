@@ -39,6 +39,8 @@ interface DockerRuntimeConfigServiceDeps {
   logSystem: (message: string) => void
   logTaskReloadSummary: (reason: DockerRuntimeConfigApplyReason, summary: TaskReloadSummary) => void
   reconcileCookieCloudSync: (prevConfig: DockerConfig | null, nextConfig: DockerConfig) => void
+  reconcilePushChannel: (nextConfig: DockerConfig) => void
+  reconcilePushReport: (nextConfig: DockerConfig) => void
   reconcileTaskJobs: (prevConfig: DockerConfig | null, nextConfig: DockerConfig, hasCookieSource: boolean) => TaskReloadSummary
   setCurrentConfig: (config: DockerConfig) => void
   stopTaskJobs: () => void
@@ -52,6 +54,10 @@ export class DockerRuntimeConfigService {
     const prevConfig = this.deps.getCurrentConfig()
     assertDockerConfigCrons(nextConfig)
     this.deps.setCurrentConfig(nextConfig)
+
+    // 推送汇总与登录态/业务任务无关，必须在下面的提前 return 之前完成 reconcile
+    this.deps.reconcilePushChannel(nextConfig)
+    this.deps.reconcilePushReport(nextConfig)
 
     this.applyCacheInvalidation(analyzeDockerRuntimeConfigChange(prevConfig, nextConfig))
     this.deps.reconcileCookieCloudSync(prevConfig, nextConfig)

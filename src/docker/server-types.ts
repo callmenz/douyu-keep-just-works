@@ -1,4 +1,4 @@
-import type { CookieDiagnostics, DockerConfig, EffectiveCookiePreview, Fans, FansStatusResponse, LoginCookiesConfig, PassportQrLoginPublicStatus, YubaStatusResponse } from '../core/types'
+import type { CookieDiagnostics, DockerConfig, EffectiveCookiePreview, Fans, FansStatusResponse, LoginCookiesConfig, PassportQrLoginPublicStatus, PushReportSnapshot, YubaStatusResponse } from '../core/types'
 import type { DockerConfigUpdate } from './config-store'
 import type { LogEntry } from './logger'
 import type { TaskType } from './task-metadata'
@@ -40,4 +40,7 @@ export interface AppContext {
   fetchFansStatusDetails(options?: CacheRefreshOptions): Promise<FansStatusResponse>
   fetchFansStatus(options?: CacheRefreshOptions): Promise<FansStatusResponse>
   fetchYubaStatus(options?: CacheRefreshOptions): Promise<YubaStatusResponse>
+  getPushReportSnapshot(): PushReportSnapshot
+  sendPushReportNow(): Promise<{ ok: boolean, error?: string }>
+  sendPushTest(): Promise<{ ok: boolean, error?: string }>
 }

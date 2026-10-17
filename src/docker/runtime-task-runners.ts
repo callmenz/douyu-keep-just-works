@@ -4,6 +4,7 @@ import type { StatusCacheScope } from './runtime-cache'
 import { MAIN_DOUYU_URL, YUBA_DOUYU_URL } from './runtime-constants'
 import { getTaskLabel, getTaskNotConfiguredMessage, createTaskRecord, getTriggerableTaskConfig } from './task-metadata'
 import type { TaskType } from './task-metadata'
+import { recordTaskRun, sendTaskRunCard } from './runtime-notify'
 
 type TaskLoggerMap = Record<TaskType, (message: string) => void>
 
@@ -66,7 +67,45 @@ async function triggerConfiguredTask<TConfig>(options: {
   }, manualTriggerOptions)
 }
 
-export async function runRuntimeTask(type: TaskType, config: DockerConfig[TaskType], deps: RuntimeTaskRunnerDeps): Promise<void> {
+export async function runRuntimeTask(
+  type: TaskType,
+  config: DockerConfig[TaskType],
+  deps: RuntimeTaskRunnerDeps,
+  trigger: 'manual' | 'scheduled' = 'scheduled',
+): Promise<void> {
+  const startedAt = new Date().toISOString()
+  const collected: string[] = []
+  const recordingDeps: RuntimeTaskRunnerDeps = {
+    ...deps,
+    taskLoggers: {
+      ...deps.taskLoggers,
+      [type]: (message: string) => {
+        deps.taskLoggers[type](message)
+        collected.push(message)
+        if (collected.length > 40) {
+          collected.shift()
+        }
+      },
+    },
+  }
+
+  try {
+    await executeRuntimeTask(type, config, recordingDeps)
+    const record = recordTaskRun({ type, ok: true, startedAt, logs: collected })
+    // 定时任务只记录，等每日汇总统一发；手动触发立即推送单次结果
+    if (trigger === 'manual') {
+      await sendTaskRunCard(record, trigger)
+    }
+  } catch (error: unknown) {
+    const record = recordTaskRun({ type, ok: false, startedAt, error, logs: collected })
+    if (trigger === 'manual') {
+      await sendTaskRunCard(record, trigger)
+    }
+    throw error
+  }
+}
+
+async function executeRuntimeTask(type: TaskType, config: DockerConfig[TaskType], deps: RuntimeTaskRunnerDeps): Promise<void> {
   try {
     await runtimeTaskRunners[type](config, deps)
   } catch (error: unknown) {
@@ -91,7 +130,7 @@ export async function triggerRuntimeTask(
     config: taskConfig,
     deps,
     taskType: type,
-    runTask: async resolvedConfig => await runRuntimeTask(type, resolvedConfig, deps),
+    runTask: async resolvedConfig => await runRuntimeTask(type, resolvedConfig, deps, 'manual'),
   })
 }
 

@@ -14,7 +14,10 @@ import { DockerRuntimeCookieRecoveryService } from './runtime-cookie-recovery'
 import { DockerCookieSourceManager } from './runtime-cookie-source'
 import { DockerRuntimeFansSyncService } from './runtime-fans-sync'
 import { DockerTaskScheduler } from './runtime-scheduler'
-import { createTaskRecord, TASK_LOG_CATEGORIES } from './task-metadata'
+import { createTaskRecord, getTaskConfig, hasEnabledTaskConfig, isTaskEnabled, TASK_LABELS, TASK_LOG_CATEGORIES, TASK_TYPES } from './task-metadata'
+import { buildCookieStatus } from './runtime-cookie-status'
+import { getPushChannelSettings, getTodayLastRun, notifyLoginRequired, sendDailyReport, sendTestCard, setPushChannelConfig, setPushChannelResolver } from './runtime-notify'
+import { DockerReportScheduler } from './runtime-report'
 import type { TaskType } from './task-metadata'
 
 let currentConfig: DockerConfig | null = null
@@ -52,6 +55,12 @@ const scheduler = new DockerTaskScheduler({
   runAndInvalidateStatusCache: (scope, runTask) => runtimeCache.runAndInvalidateStatus(scope, runTask),
 })
 
+const reportScheduler = new DockerReportScheduler({
+  getConfig: () => currentConfig,
+  getConfigPath: () => activeConfigPath,
+  logSystem,
+})
+
 const cookieCloudSync = new DockerCookieCloudSyncService({
   hasCookieCloudSource: config => cookieSource.hasCookieCloudSource(config),
   logSystem,
@@ -67,6 +76,8 @@ const runtimeConfigService = new DockerRuntimeConfigService({
   logSystem,
   logTaskReloadSummary: (reason, summary) => scheduler.logTaskReloadSummary(reason, summary),
   reconcileCookieCloudSync: (prevConfig, nextConfig) => cookieCloudSync.reconcile(prevConfig, nextConfig),
+  reconcilePushChannel: nextConfig => setPushChannelConfig(nextConfig.pushChannel),
+  reconcilePushReport: nextConfig => reportScheduler.reconcile(nextConfig),
   reconcileTaskJobs: (prevConfig, nextConfig, hasCookieSource) => scheduler.reconcileTaskJobs(prevConfig, nextConfig, hasCookieSource),
   setCurrentConfig: (config) => {
     currentConfig = config
@@ -144,6 +155,31 @@ export function startDockerRuntime(options: DockerRuntimeOptions): void {
     getFansStatus: async (cookie, logger, options) => await runtimeCache.getFansStatus(cookie, logger, options?.forceRefresh),
     getYubaStatus: async (fetchStatus, options) => await runtimeCache.getYubaStatus(fetchStatus, options?.forceRefresh),
     runWithCookieSourceRetry: async (context, run) => await cookieRecovery.runWithCookieSourceRetry(context, run),
+    getPushReportSnapshot: () => {
+      const config = currentConfig
+      const pushReport = config?.pushReport
+      return {
+        enabled: Boolean(pushReport?.enabled),
+        cron: pushReport?.cron || '',
+        configured: Boolean(pushReport?.enabled && pushReport?.cron),
+        nextRun: reportScheduler.getNextRun(),
+        cookie: buildCookieStatus(config, activeConfigPath),
+        channel: getPushChannelSettings(),
+        tasks: TASK_TYPES.map((type) => {
+          const taskConfig = getTaskConfig(config, type)
+          const lastRun = getTodayLastRun(type)
+          return {
+            type,
+            label: TASK_LABELS[type],
+            enabled: isTaskEnabled(taskConfig),
+            cron: taskConfig?.cron || '',
+            lastRun,
+          }
+        }),
+      }
+    },
+    sendPushReportNow: async () => await sendDailyReport(currentConfig, buildCookieStatus(currentConfig, activeConfigPath)),
+    sendPushTest: async () => await sendTestCard(),
     logSystem,
   })
 
@@ -152,10 +188,23 @@ export function startDockerRuntime(options: DockerRuntimeOptions): void {
     logSystem(`WebUI 已启动: http://0.0.0.0:${webPort}`)
   })
 
+  // 有启用中的任务却没有任何登录态时，任务会被静默跳过；启动后主动推一条提醒
+  // 渠道配置来自 config.json（界面里可改），没配则回退环境变量。
+  // 用 resolver 而非快照，保证 WebUI 改完立刻生效（不走 applyConfig 的路径也能读到）。
+  setPushChannelResolver(() => currentConfig?.pushChannel)
+  setPushChannelConfig(currentConfig?.pushChannel)
+  reportScheduler.reconcile(currentConfig)
+
+  if (currentConfig && hasEnabledTaskConfig(currentConfig) && !cookieSource.hasConfiguredCookieSource(currentConfig)) {
+    logSystem('未检测到登录凭证，已启用任务不会执行，等待扫码登录')
+    void notifyLoginRequired(process.env.WEB_PORT || webPort)
+  }
+
   const shutdown = () => {
     logSystem('收到停止信号，正在关闭...')
     cookieCloudSync.stop()
     scheduler.stopJobs()
+    reportScheduler.stop()
     process.exit(0)
   }
   process.on('SIGTERM', shutdown)

@@ -9,6 +9,7 @@ import KeepalivePage from './KeepalivePage.vue'
 import LoginConfigPage from './LoginConfigPage.vue'
 import LogsPage from './LogsPage.vue'
 import OverviewPage from './OverviewPage.vue'
+import PushSettingsPage from './PushSettingsPage.vue'
 import SidebarNav from './SidebarNav.vue'
 import TopToolbar from './TopToolbar.vue'
 import YubaPage from './YubaPage.vue'
@@ -94,6 +95,10 @@ const emit = defineEmits<{
 
       <section id="page-expiring-gift" class="page" :class="{ active: activeTab === 'expiring-gift' }" role="tabpanel" aria-labelledby="tab-expiring-gift" tabindex="0" :aria-hidden="activeTab === 'expiring-gift' ? 'false' : 'true'" :hidden="activeTab !== 'expiring-gift'">
         <ExpiringPage />
+      </section>
+
+      <section id="page-push" class="page" :class="{ active: activeTab === 'push' }" role="tabpanel" aria-labelledby="tab-push" tabindex="0" :aria-hidden="activeTab === 'push' ? 'false' : 'true'" :hidden="activeTab !== 'push'">
+        <PushSettingsPage />
       </section>
 
       <section id="page-logs" class="page" :class="{ active: activeTab === 'logs' }" role="tabpanel" aria-labelledby="tab-logs" tabindex="0" :aria-hidden="activeTab === 'logs' ? 'false' : 'true'" :hidden="activeTab !== 'logs'">

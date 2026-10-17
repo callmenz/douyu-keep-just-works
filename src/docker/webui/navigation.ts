@@ -8,6 +8,7 @@ export type WebUiPageTab
     | 'double-card'
     | 'expiring-gift'
     | 'yuba'
+    | 'push'
     | 'logs'
 
 export interface WebUiPageMeta {
@@ -34,6 +35,7 @@ const DEFAULT_PAGE_ROUTES: Record<WebUiPageTab, string> = {
   'double-card': '/Configurations/DoubleCardConfig',
   'expiring-gift': '/Configurations/ExpiringGiftConfig',
   'yuba': '/Configurations/YubaCheckInConfig',
+  'push': '/Configurations/PushReportConfig',
   'logs': '/Logs',
 }
 
@@ -72,6 +74,11 @@ export const WEBUI_PAGE_TABS: WebUiPageMeta[] = [
     key: 'yuba',
     label: '鱼吧签到',
     title: '鱼吧签到',
+  },
+  {
+    key: 'push',
+    label: '推送设置',
+    title: '推送设置',
   },
   {
     key: 'logs',
