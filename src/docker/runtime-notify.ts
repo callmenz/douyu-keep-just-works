@@ -5,6 +5,7 @@ import process from 'node:process'
 import axios from 'axios'
 import { errorMessage } from '../core/errors'
 import { getTaskConfig, getTaskLabel, isTaskEnabled, TASK_TYPES } from './task-metadata'
+import { buildTaskRunSummary } from './runtime-task-summary'
 import type { TaskType } from './task-metadata'
 
 /**
@@ -315,6 +316,8 @@ export async function sendCard(args: {
   subtitle?: string
   tags?: CardTag[]
   elements: CardElement[]
+  /** 首选卡片被拒时的第二版元素（例如去掉折叠面板），仍然失败才降级成文本 */
+  retryElements?: CardElement[]
   fallbackText: string
 }): Promise<{ ok: boolean, error?: string }> {
   const settings = readMagicPushSettings()
@@ -329,22 +332,35 @@ export async function sendCard(args: {
     return await sendText(url, args.title, args.fallbackText)
   }
 
-  try {
-    const resp = await axios.post(url, {
-      title: args.title.slice(0, 200),
-      content: args.fallbackText,
-      type: 'text',
-      extraData: { feishu: { channelType: 'interactive_card', card } },
-    }, { timeout: NOTIFY_TIMEOUT_MS })
+  const attempts: Array<{ elements: CardElement[], label: string }> = [
+    { elements: args.elements, label: '完整卡片' },
+    ...(args.retryElements ? [{ elements: args.retryElements, label: '简化卡片' }] : []),
+  ]
 
-    if (resp.data?.success !== false) {
-      return { ok: true }
+  for (const attempt of attempts) {
+    const payload = attempt.label === '完整卡片' && attempts.length > 1
+      ? card
+      : buildCard({ title: args.title, subtitle: args.subtitle, tags: args.tags, elements: attempt.elements })
+
+    try {
+      const resp = await axios.post(url, {
+        title: args.title.slice(0, 200),
+        content: args.fallbackText,
+        type: 'text',
+        extraData: { feishu: { channelType: 'interactive_card', card: payload } },
+      }, { timeout: NOTIFY_TIMEOUT_MS })
+
+      if (resp.data?.success !== false) {
+        return { ok: true }
+      }
+      const message = String(resp.data?.message || '卡片被拒收')
+      console.error(`[通知] ${attempt.label}推送被拒: ${message}`)
+    } catch (error: unknown) {
+      console.error(`[通知] ${attempt.label}推送异常: ${errorMessage(error)}`)
     }
-    const message = String(resp.data?.message || '卡片被拒收')
-    console.error(`[通知] 卡片推送失败，降级为文本: ${message}`)
-  } catch (error: unknown) {
-    console.error(`[通知] 卡片推送异常，降级为文本: ${errorMessage(error)}`)
   }
+
+  console.error('[通知] 卡片全部失败，降级为文本')
 
   try {
     const resp = await axios.post(url, {
@@ -602,50 +618,112 @@ export async function sendDailyReport(config: DockerConfig | null, cookieStatus?
 // ---------------------------------------------------------------- 单次任务结果
 
 /** 手动触发任务后即时推送的执行结果卡片 */
+/** 一条日志转 markdown 列表项，管道符要转义否则会被当成表格分隔 */
+function logBullet(line: string): string {
+  return `- ${line.replace(/\|/g, '\\|')}`
+}
+
+/**
+ * 可折叠面板（飞书卡片 2.0 collapsible_panel）。
+ * 完整日志默认收起，只有想看细节时才展开——避免卡片一屏全是日志。
+ */
+function collapsibleLogs(logs: string[], title: string): CardElement {
+  return {
+    tag: 'collapsible_panel',
+    expanded: false,
+    header: {
+      title: { tag: 'markdown', content: `**${title}**` },
+      vertical_align: 'center',
+      icon: { tag: 'standard_icon', token: 'down-small-ccm_outlined', size: '16px 16px' },
+      icon_position: 'right',
+      icon_expanded_angle: -180,
+    },
+    border: { color: 'grey', corner_radius: '5px' },
+    vertical_spacing: '8px',
+    padding: '8px 8px 8px 8px',
+    elements: [{ tag: 'markdown', content: logs.map(logBullet).join('\n') }],
+  }
+}
+
+/** 关键数据表：只放一眼要看的信息，字段抽不到就不出现 */
+function summaryTable(rows: Array<{ item: string, value: string }>): CardElement {
+  return {
+    tag: 'table',
+    page_size: 8,
+    row_height: 'low',
+    header_style: { background_style: 'orange', bold: true, text_align: 'left' },
+    columns: [
+      { name: 'item', display_name: '项目', data_type: 'text' },
+      { name: 'value', display_name: '内容', data_type: 'text' },
+    ],
+    rows,
+  }
+}
+
+/**
+ * 单次任务结果卡片。
+ *
+ * 模板（用户 2026-10-19 选定）：
+ * - 成功：关键数据表 + 全部日志收进折叠面板，卡片常态只有 5-7 行
+ * - 失败：错误原因 + 末尾 3 条日志（平铺，不用折叠），排错时不用再点一下
+ */
 export async function sendTaskRunCard(record: TaskRunRecord, trigger: 'manual' | 'scheduled'): Promise<{ ok: boolean, error?: string }> {
+  const summary = buildTaskRunSummary(record)
   const statusTag = record.ok
     ? { text: '✅ 执行成功', color: 'green' }
     : { text: '❌ 执行失败', color: 'red' }
 
-  const logs = record.logs.slice(-10)
-  const elements: CardElement[] = [
-    {
-      tag: 'markdown',
-      content: [
-        `**触发方式**：${trigger === 'manual' ? '手动执行' : '定时执行'}`,
-        `**开始时间**：${formatTime(record.startedAt)}`,
-        `**耗时**：${formatDuration(record)}`,
-        `**结果**：${record.ok ? '<font color=\'green\'>成功</font>' : '<font color=\'red\'>失败</font>'}`,
-      ].join('\n'),
-    },
+  const rows = [
+    ...summary.rows,
+    { item: '耗时', value: formatDuration(record) },
+    { item: '开始', value: formatTime(record.startedAt) },
   ]
 
-  if (!record.ok && record.error) {
-    elements.push({ tag: 'hr' })
-    elements.push({ tag: 'markdown', content: `**错误**：<font color='red'>${record.error.slice(0, 300)}</font>` })
-  }
+  const elements: CardElement[] = [summaryTable(rows)]
 
-  if (logs.length > 0) {
+  if (record.ok) {
+    if (record.logs.length > 0) {
+      elements.push(collapsibleLogs(record.logs, `执行日志（${record.logs.length} 条）`))
+    }
+  } else {
     elements.push({ tag: 'hr' })
-    elements.push({ tag: 'markdown', content: '**执行日志**' })
     elements.push({
       tag: 'markdown',
-      content: logs.map(line => `- ${line.replace(/\|/g, '\\|')}`).join('\n'),
+      content: `**错误**：<font color='red'>${(record.error || '未知错误').slice(0, 300)}</font>`,
     })
+    const tail = record.logs.slice(-3)
+    if (tail.length > 0) {
+      elements.push({ tag: 'markdown', content: `**最后 ${tail.length} 条日志**` })
+      elements.push({ tag: 'markdown', content: tail.map(logBullet).join('\n') })
+    }
   }
 
-  elements.push({ tag: 'hr' })
   elements.push({
     tag: 'markdown',
     content: `<font color='grey'>🤖 douyu-keep-just-works · ${formatTime(new Date().toISOString())}</font>`,
   })
 
+  // 折叠面板被飞书拒绝时的退路：关键数据表 + 首尾各 2 条日志（平铺）
+  const plainLogs = record.logs.length > 4
+    ? [...record.logs.slice(0, 2), `…中间省略 ${record.logs.length - 4} 条…`, ...record.logs.slice(-2)]
+    : record.logs
+  const retryElements: CardElement[] = [
+    summaryTable(rows),
+    ...(plainLogs.length > 0
+      ? [{ tag: 'markdown', content: '**执行日志**' }, { tag: 'markdown', content: plainLogs.map(logBullet).join('\n') }]
+      : []),
+    {
+      tag: 'markdown',
+      content: `<font color='grey'>🤖 douyu-keep-just-works · ${formatTime(new Date().toISOString())}</font>`,
+    },
+  ]
+
   const fallbackText = [
     `**斗鱼 ${record.label}${record.ok ? '成功' : '失败'}**`,
     `触发方式：${trigger === 'manual' ? '手动执行' : '定时执行'}`,
-    `开始：${formatTime(record.startedAt)} · 耗时 ${formatDuration(record)}`,
+    summary.headline,
+    `耗时 ${formatDuration(record)}`,
     ...(record.ok ? [] : [`错误：${record.error || '未知错误'}`]),
-    ...(logs.length ? ['', '执行日志：', ...logs.map(line => `- ${line}`)] : []),
   ].join('\n')
 
   return await sendCard({
@@ -653,6 +731,7 @@ export async function sendTaskRunCard(record: TaskRunRecord, trigger: 'manual' |
     subtitle: `${trigger === 'manual' ? '手动执行' : '定时执行'} · ${formatTime(record.finishedAt)}`,
     tags: [statusTag, { text: '单次任务', color: 'orange' }],
     elements,
+    retryElements,
     fallbackText,
   })
 }
