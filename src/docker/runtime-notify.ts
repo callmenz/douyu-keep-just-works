@@ -1,4 +1,6 @@
 import type { CookieStatusSummary, DockerConfig, PushChannelConfig, TaskRunRecord } from '../core/types'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import process from 'node:process'
 import axios from 'axios'
 import { errorMessage } from '../core/errors'
@@ -108,8 +110,79 @@ export function isMagicPushEnabled(): boolean {
 
 const runHistory: Map<string, TaskRunRecord[]> = new Map()
 
+/** 任务运行历史保留天数 */
+export const RUN_HISTORY_DAYS = 30
+let runHistoryPath: string | null = null
+
 function nowIso(): string {
   return new Date().toISOString()
+}
+
+function persistRunHistory(): void {
+  if (!runHistoryPath) {
+    return
+  }
+  const records: TaskRunRecord[] = []
+  for (const list of runHistory.values()) {
+    records.push(...list)
+  }
+  records.sort((a, b) => a.finishedAt.localeCompare(b.finishedAt))
+  try {
+    const tmp = `${runHistoryPath}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, records }, null, 2), { encoding: 'utf-8', mode: 0o600 })
+    // 本卷（btrfs+trimacl）新建文件默认 0000，写模式参数不生效，必须显式 chmod 后再改名
+    fs.chmodSync(tmp, 0o600)
+    fs.renameSync(tmp, runHistoryPath)
+    try {
+      fs.chmodSync(runHistoryPath, 0o600)
+    } catch {
+      // 某些挂载点不支持 chmod
+    }
+  } catch {
+    // 落盘失败不影响任务本身，只是重启后日报会缺历史
+  }
+}
+
+/**
+ * 初始化任务历史存储：读回 run-history.json，丢弃超过 RUN_HISTORY_DAYS 的记录。
+ * 容器重启后日报仍能拿到当天已执行过的任务，而不是一片「未执行」。
+ */
+export function initRunHistory(configDir: string): void {
+  runHistoryPath = path.join(configDir, 'run-history.json')
+  let raw: string
+  try {
+    raw = fs.readFileSync(runHistoryPath, 'utf-8')
+  } catch {
+    return
+  }
+  let parsed: { records?: unknown }
+  try {
+    parsed = JSON.parse(raw) as { records?: unknown }
+  } catch {
+    return
+  }
+  if (!Array.isArray(parsed.records)) {
+    return
+  }
+  const cutoff = new Date(Date.now() - (RUN_HISTORY_DAYS - 1) * 24 * 60 * 60 * 1000)
+  const cutoffKey = shanghaiDayKey(cutoff)
+  for (const item of parsed.records as TaskRunRecord[]) {
+    if (!item || typeof item.type !== 'string' || typeof item.finishedAt !== 'string') {
+      continue
+    }
+    if (shanghaiDayKey(item.finishedAt) < cutoffKey) {
+      continue
+    }
+    const list = runHistory.get(item.type) || []
+    list.push(item)
+    runHistory.set(item.type, list)
+  }
+  for (const [type, list] of runHistory) {
+    list.sort((a, b) => a.finishedAt.localeCompare(b.finishedAt))
+    runHistory.set(type, list.slice(-MAX_RUNS_PER_TASK))
+  }
+  // 读回时就把过期记录从磁盘抹掉，避免文件无限增长
+  persistRunHistory()
 }
 
 /** 记录一次任务执行结果（不再单独推送，只进当日汇总） */
@@ -135,6 +208,7 @@ export function recordTaskRun(args: {
     list.shift()
   }
   runHistory.set(args.type, list)
+  persistRunHistory()
   return record
 }
 
@@ -170,6 +244,13 @@ export function getAllTodayRuns(): Record<string, TaskRunRecord | undefined> {
 
 export function clearRunHistory(): void {
   runHistory.clear()
+  if (runHistoryPath) {
+    try {
+      fs.rmSync(runHistoryPath, { force: true })
+    } catch {
+      // 忽略
+    }
+  }
 }
 
 // ---------------------------------------------------------------- 卡片构造

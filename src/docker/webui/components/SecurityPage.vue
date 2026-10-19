@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { reactive } from 'vue'
 import PageSection from './PageSection.vue'
 import { formatPasswordTime, useSecurityPage } from '../security'
 
@@ -21,6 +22,13 @@ const {
   strength,
   submit,
 } = useSecurityPage()
+
+// 三个密码框各自独立的小眼睛；本页是敏感操作，不记忆状态，刷新后一律回到隐藏
+const visible = reactive({ current: false, next: false, confirm: false })
+
+function toggleVisible(key: keyof typeof visible): void {
+  visible[key] = !visible[key]
+}
 </script>
 
 <template>
@@ -82,27 +90,69 @@ const {
       <form class="security-form" @submit.prevent="submit">
         <div class="field-block">
           <label class="field-label" for="security-current">当前密码</label>
-          <input
-            id="security-current"
-            v-model="currentPassword"
-            name="security-current"
-            type="password"
-            autocomplete="current-password"
-            spellcheck="false"
-          >
+          <div class="field-with-eye">
+            <input
+              id="security-current"
+              v-model="currentPassword"
+              name="security-current"
+              :type="visible.current ? 'text' : 'password'"
+              autocomplete="current-password"
+              spellcheck="false"
+            >
+            <button
+              class="auth-password-toggle"
+              type="button"
+              :aria-pressed="visible.current ? 'true' : 'false'"
+              :aria-label="visible.current ? '隐藏当前密码' : '显示当前密码明文'"
+              :title="visible.current ? '隐藏当前密码' : '显示当前密码明文'"
+              @click="toggleVisible('current')"
+            >
+              <svg v-if="!visible.current" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2.6 12S6.2 5.6 12 5.6 21.4 12 21.4 12 17.8 18.4 12 18.4 2.6 12 2.6 12z" />
+                <circle cx="12" cy="12" r="3.1" />
+              </svg>
+              <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 3l18 18" />
+                <path d="M10.7 6.1A10 10 0 0 1 12 6c5.8 0 9.4 6 9.4 6a17.6 17.6 0 0 1-3.1 3.8" />
+                <path d="M6.4 7.8A17.4 17.4 0 0 0 2.6 12S6.2 18 12 18a10 10 0 0 0 4-.85" />
+                <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div class="field-block">
           <label class="field-label" for="security-new">新密码</label>
-          <input
-            id="security-new"
-            v-model="newPassword"
-            name="security-new"
-            type="password"
-            autocomplete="new-password"
-            spellcheck="false"
-            placeholder="至少 6 位"
-          >
+          <div class="field-with-eye">
+            <input
+              id="security-new"
+              v-model="newPassword"
+              name="security-new"
+              :type="visible.next ? 'text' : 'password'"
+              autocomplete="new-password"
+              spellcheck="false"
+              placeholder="至少 6 位"
+            >
+            <button
+              class="auth-password-toggle"
+              type="button"
+              :aria-pressed="visible.next ? 'true' : 'false'"
+              :aria-label="visible.next ? '隐藏新密码' : '显示新密码明文'"
+              :title="visible.next ? '隐藏新密码' : '显示新密码明文'"
+              @click="toggleVisible('next')"
+            >
+              <svg v-if="!visible.next" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2.6 12S6.2 5.6 12 5.6 21.4 12 21.4 12 17.8 18.4 12 18.4 2.6 12 2.6 12z" />
+                <circle cx="12" cy="12" r="3.1" />
+              </svg>
+              <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 3l18 18" />
+                <path d="M10.7 6.1A10 10 0 0 1 12 6c5.8 0 9.4 6 9.4 6a17.6 17.6 0 0 1-3.1 3.8" />
+                <path d="M6.4 7.8A17.4 17.4 0 0 0 2.6 12S6.2 18 12 18a10 10 0 0 0 4-.85" />
+                <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+              </svg>
+            </button>
+          </div>
           <div v-if="strength.text" class="helper" :class="`strength-${strength.level}`">
             {{ strength.text }}
           </div>
@@ -110,14 +160,35 @@ const {
 
         <div class="field-block">
           <label class="field-label" for="security-confirm">确认新密码</label>
-          <input
-            id="security-confirm"
-            v-model="confirmPassword"
-            name="security-confirm"
-            type="password"
-            autocomplete="new-password"
-            spellcheck="false"
-          >
+          <div class="field-with-eye">
+            <input
+              id="security-confirm"
+              v-model="confirmPassword"
+              name="security-confirm"
+              :type="visible.confirm ? 'text' : 'password'"
+              autocomplete="new-password"
+              spellcheck="false"
+            >
+            <button
+              class="auth-password-toggle"
+              type="button"
+              :aria-pressed="visible.confirm ? 'true' : 'false'"
+              :aria-label="visible.confirm ? '隐藏确认密码' : '显示确认密码明文'"
+              :title="visible.confirm ? '隐藏确认密码' : '显示确认密码明文'"
+              @click="toggleVisible('confirm')"
+            >
+              <svg v-if="!visible.confirm" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2.6 12S6.2 5.6 12 5.6 21.4 12 21.4 12 17.8 18.4 12 18.4 2.6 12 2.6 12z" />
+                <circle cx="12" cy="12" r="3.1" />
+              </svg>
+              <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 3l18 18" />
+                <path d="M10.7 6.1A10 10 0 0 1 12 6c5.8 0 9.4 6 9.4 6a17.6 17.6 0 0 1-3.1 3.8" />
+                <path d="M6.4 7.8A17.4 17.4 0 0 0 2.6 12S6.2 18 12 18a10 10 0 0 0 4-.85" />
+                <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+              </svg>
+            </button>
+          </div>
           <div v-if="mismatch" class="helper security-error">
             两次输入的新密码不一致
           </div>
@@ -139,6 +210,14 @@ const {
 </template>
 
 <style scoped>
+.field-with-eye{
+  position:relative;
+  display:block;
+}
+.field-with-eye input{
+  width:100%;
+  padding-right:56px;
+}
 .security-status{
   display:flex;
   flex-direction:column;

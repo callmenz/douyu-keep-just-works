@@ -5,7 +5,7 @@ import { createDefaultDockerConfig } from '../core/config-normalization'
 import type { DockerConfig } from '../core/types'
 import { WebPasswordStore } from './auth-password'
 import { loadConfigFromDisk, saveConfigToDisk } from './config-store'
-import { createLogger } from './logger'
+import { createLogger, initLogStore } from './logger'
 import { createServer } from './server'
 import { createRuntimeAppContext } from './runtime-app-context'
 import { DockerRuntimeCache } from './runtime-cache'
@@ -18,7 +18,7 @@ import { DockerRuntimeFansSyncService } from './runtime-fans-sync'
 import { DockerTaskScheduler } from './runtime-scheduler'
 import { createTaskRecord, getTaskConfig, hasEnabledTaskConfig, isTaskEnabled, TASK_LABELS, TASK_LOG_CATEGORIES, TASK_TYPES } from './task-metadata'
 import { buildCookieStatus } from './runtime-cookie-status'
-import { getPushChannelSettings, getTodayLastRun, notifyLoginRequired, sendDailyReport, sendTestCard, setPushChannelConfig, setPushChannelResolver } from './runtime-notify'
+import { getPushChannelSettings, getTodayLastRun, initRunHistory, notifyLoginRequired, sendDailyReport, sendTestCard, setPushChannelConfig, setPushChannelResolver } from './runtime-notify'
 import { DockerReportScheduler } from './runtime-report'
 import type { TaskType } from './task-metadata'
 
@@ -114,10 +114,16 @@ export function startDockerRuntime(options: DockerRuntimeOptions): void {
   activeConfigPath = configPath
 
   // 密码存储：config/auth.json 优先（界面改过），否则回退 WEB_PASSWORD
+  const configDir = path.dirname(path.resolve(configPath))
   const passwordStore = new WebPasswordStore({
-    filePath: path.join(path.dirname(path.resolve(configPath)), 'auth.json'),
+    filePath: path.join(configDir, 'auth.json'),
     initialPassword: webPassword,
   })
+
+  // 日志与任务历史落盘：必须在第一条日志之前初始化，否则重启后首屏是空的
+  initLogStore(path.join(configDir, 'logs'))
+  initRunHistory(configDir)
+
   logSystem('斗鱼粉丝牌续牌 Docker 版启动')
 
   try {

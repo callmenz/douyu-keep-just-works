@@ -4,7 +4,7 @@ import type { WebPasswordStore } from './auth-password'
 import { assertDockerConfigCrons } from './cron'
 import { buildConfigWithPartialUpdate } from './config-store'
 import type { DockerConfigUpdate } from './config-store'
-import { clearLogs, getLogs } from './logger'
+import { clearLogs, getLogs, getLogsForDay, listLogDays } from './logger'
 import { MAIN_DOUYU_URL, YUBA_DOUYU_URL } from './runtime-constants'
 import type { DockerRuntimeConfigApplyReason } from './runtime-config-service'
 import type { DockerRuntimeFansSyncReason } from './runtime-fans-sync'
@@ -112,6 +112,8 @@ export function createRuntimeAppContext(deps: DockerRuntimeAppContextDeps): AppC
     syncWithFans: async () => await deps.syncConfigWithFans('medal_synced'),
     getStatus: () => deps.getStatus(),
     getLogs: () => getLogs(),
+    getLogsForDay: (day: string) => getLogsForDay(day),
+    listLogDays: () => listLogDays(),
     clearLogs: () => clearLogs(),
     inspectCookieSource: async () => await deps.inspectCookieSource(),
     getEffectiveCookies: async (forceRefresh?: boolean) => await deps.getEffectiveCookies(forceRefresh),

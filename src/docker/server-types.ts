@@ -23,6 +23,8 @@ export interface AppContext {
   syncWithFans(): Promise<{ config: DockerConfig; fans: Fans[] }>
   getStatus(): { collectGift: JobStatus; keepalive: JobStatus; doubleCard: JobStatus; expiringGift: JobStatus; yubaCheckIn: JobStatus }
   getLogs(): LogEntry[]
+  getLogsForDay(day: string): LogEntry[]
+  listLogDays(): string[]
   clearLogs(): void
   inspectCookieSource(): Promise<CookieDiagnostics>
   getEffectiveCookies(forceRefresh?: boolean): Promise<EffectiveCookiePreview>
