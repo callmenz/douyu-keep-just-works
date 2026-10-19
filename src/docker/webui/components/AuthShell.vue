@@ -27,6 +27,26 @@ const emit = defineEmits<{
   'update:password': [value: string]
 }>()
 
+// 密码明文显示：点右侧眼睛切换，偏好存 localStorage（下次进来仍是上次的状态）
+const SHOW_PASSWORD_KEY = 'douyu.keep.showPassword'
+function readShowPassword(): boolean {
+  try {
+    return window.localStorage.getItem(SHOW_PASSWORD_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+const showPassword = ref(readShowPassword())
+
+function togglePassword(): void {
+  showPassword.value = !showPassword.value
+  try {
+    window.localStorage.setItem(SHOW_PASSWORD_KEY, showPassword.value ? '1' : '0')
+  } catch {
+    // 隐私模式或存储被禁用时忽略，不影响本次切换
+  }
+}
+
 function updatePassword(event: Event): void {
   emit('update:password', (event.target as HTMLInputElement).value)
 }
@@ -46,19 +66,41 @@ function updatePassword(event: Event): void {
         <form id="login-form" autocomplete="on" @submit.prevent="emit('submit')">
           <div class="field-block auth-field">
             <label class="field-label auth-field-label" for="web-password-input">WebUI 密码</label>
-            <input
-              id="web-password-input"
-              :value="password"
-              name="web-password"
-              type="password"
-              autocomplete="current-password"
-              spellcheck="false"
-              placeholder="WebUI 密码"
-              :aria-describedby="loginError ? 'login-error' : undefined"
-              :aria-invalid="loginError ? 'true' : 'false'"
-              :disabled="submittingLogin"
-              @input="updatePassword"
-            >
+            <div class="auth-input-wrap">
+              <input
+                id="web-password-input"
+                :value="password"
+                name="web-password"
+                :type="showPassword ? 'text' : 'password'"
+                autocomplete="current-password"
+                spellcheck="false"
+                placeholder="WebUI 密码"
+                :aria-describedby="loginError ? 'login-error' : undefined"
+                :aria-invalid="loginError ? 'true' : 'false'"
+                :disabled="submittingLogin"
+                @input="updatePassword"
+              >
+              <button
+                class="auth-password-toggle"
+                type="button"
+                :aria-pressed="showPassword ? 'true' : 'false'"
+                :aria-label="showPassword ? '隐藏密码' : '显示密码明文'"
+                :title="showPassword ? '隐藏密码' : '显示密码明文'"
+                :disabled="submittingLogin"
+                @click="togglePassword"
+              >
+                <svg v-if="!showPassword" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M2.6 12S6.2 5.6 12 5.6 21.4 12 21.4 12 17.8 18.4 12 18.4 2.6 12 2.6 12z" />
+                  <circle cx="12" cy="12" r="3.1" />
+                </svg>
+                <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M3 3l18 18" />
+                  <path d="M10.7 6.1A10 10 0 0 1 12 6c5.8 0 9.4 6 9.4 6a17.6 17.6 0 0 1-3.1 3.8" />
+                  <path d="M6.4 7.8A17.4 17.4 0 0 0 2.6 12S6.2 18 12 18a10 10 0 0 0 4-.85" />
+                  <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+                </svg>
+              </button>
+            </div>
           </div>
           <div v-if="hint" class="auth-hint">
             <button
