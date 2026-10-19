@@ -503,6 +503,87 @@ function lastLogLine(record: TaskRunRecord | undefined): string {
 }
 
 /** 构造「今日任务执行汇总」卡片 */
+/** 只有时间（HH:mm），日报里表头已经写了「执行」，日期是摘要行 */
+function formatClock(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return '—'
+  }
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date)
+}
+
+/**
+ * 登录类失败的特征词。斗鱼失效时的报错文案在不同链路不一样
+ * （cookie 缺失、LTP0 过期、safeAuth 续期失败、接口 401、CSRF/Gee 风控），
+ * 这里做宽松匹配，宁可多报一次「疑似失效」也不要漏报。
+ */
+const LOGIN_FAILURE_PATTERN = /登录|登陆|cookie|Cookie|LTP0|扫码|acf_|dy_auth|凭证|未授权|401/
+
+function isLoginFailure(record: TaskRunRecord | undefined): boolean {
+  if (!record || record.ok) {
+    return false
+  }
+  return LOGIN_FAILURE_PATTERN.test(record.error || '')
+}
+
+/**
+ * 日报顶部的登录态健康条（单行）。
+ *
+ * 为什么不能写「剩余 N 天」：`LTP0` 不是 JWT，斗鱼也不下发带有效期的字段，
+ * 本地无法算出过期时间。所以只报告能证实的东西——结构完整性 + 今天是否真的
+ * 因为登录失败过。任何一个任务因登录类错误失败，就按「已失效」报，不粉饰。
+ */
+export function buildCookieHealthLine(
+  status: CookieStatusSummary | undefined,
+  options: { failedRecords: TaskRunRecord[], yubaEnabled: boolean },
+): string {
+  if (!status) {
+    return '🔑 <font color=\'grey\'>Cookie 状态未知</font>'
+  }
+
+  const loginFailures = options.failedRecords.filter(record => isLoginFailure(record)).length
+
+  if (status.error) {
+    return `🔑 <font color='red'>Cookie 已失效 ❌ · ${status.error.slice(0, 60)} · 请到 WebUI 扫码</font>`
+  }
+
+  if (loginFailures > 0) {
+    return `🔑 <font color='red'>Cookie 已失效 ❌ · ${loginFailures} 个任务因登录失败 · 请到 WebUI 扫码</font>`
+  }
+
+  if (!status.ltp0Present) {
+    return '🔑 <font color=\'red\'>Cookie 疑似失效 ⚠️ · 缺少 LTP0 长效凭证 · 无法自动续期</font>'
+  }
+
+  if (!status.mainReady) {
+    const missing = status.mainMissingKeys.slice(0, 3).join('、') || '未知字段'
+    return `🔑 <font color='red'>Cookie 字段不全 ⚠️ · 缺少 ${missing} · 建议重新扫码</font>`
+  }
+
+  if (options.yubaEnabled && !status.yubaReady) {
+    const missing = status.yubaMissingKeys.slice(0, 3).join('、') || '未知字段'
+    return `🔑 主站 <font color='green'>有效</font> · 鱼吧缺 ${missing}`
+  }
+
+  return '🔑 Cookie <font color=\'green\'>有效</font> · LTP0 正常 · 主站齐全'
+}
+
+/**
+ * 日报卡片（2026-10-19 定稿，用户选定 B-2）。
+ *
+ * 版式：登录态健康条置顶 → 3 列任务表（任务/执行/结果）→ 底部一行统计。
+ * 登录态放第一行的理由：Cookie 失效是唯一会让所有任务一起挂的故障，
+ * 置顶能一眼分清「任务真的没问题」和「全都因为没登录而失败」。
+ *
+ * 相比旧版删掉了「计划(cron)」「耗时」「摘要(日志末行)」三列：
+ * cron 表达式在手机上会把列宽撑开，日志末行经常是半句废话。
+ * 结果列改用 buildTaskRunSummary() 抽出的结构化结论。
+ */
 export function buildDailyReportCard(config: DockerConfig | null, cookieStatus?: CookieStatusSummary): { title: string, subtitle: string, tags: CardTag[], elements: CardElement[], fallbackText: string } {
   const enabledTasks = TASK_TYPES
     .map(type => ({ type, config: getTaskConfig(config, type) }))
@@ -512,29 +593,31 @@ export function buildDailyReportCard(config: DockerConfig | null, cookieStatus?:
   const okCount = enabledTasks.filter(item => runs[item.type]?.ok).length
   const failCount = enabledTasks.filter(item => runs[item.type] && !runs[item.type]!.ok).length
   const idleCount = enabledTasks.length - okCount - failCount
+  const failedRecords = enabledTasks.map(item => runs[item.type]).filter((item): item is TaskRunRecord => Boolean(item && !item.ok))
 
   const today = shanghaiDayKey(new Date())
+  const yubaEnabled = enabledTasks.some(item => item.type === 'yubaCheckIn')
+
   const rows = enabledTasks.map((item) => {
     const record = runs[item.type]
-    const status = statusLabel(record)
+    if (!record) {
+      return { task: getTaskLabel(item.type), when: '—', result: '⚪ 未执行' }
+    }
+    const summary = buildTaskRunSummary(record)
+    const icon = record.ok ? '✅' : '❌'
     return {
       task: getTaskLabel(item.type),
-      schedule: item.config?.cron || '-',
-      last_run: record ? formatTime(record.finishedAt) : '—',
-      duration: record ? formatDuration(record) : '—',
-      status: status.text,
-      detail: lastLogLine(record),
+      when: formatClock(record.finishedAt),
+      result: `${icon} ${summary.headline.slice(0, 40)}`,
     }
   })
 
+  const healthLine = buildCookieHealthLine(cookieStatus, { failedRecords, yubaEnabled })
+  const loginBroken = failedRecords.filter(record => isLoginFailure(record)).length > 0
+    || Boolean(cookieStatus && (cookieStatus.error || !cookieStatus.ltp0Present || !cookieStatus.mainReady))
+
   const elements: CardElement[] = [
-    {
-      tag: 'markdown',
-      content: [
-        `**📅 ${today}** · 已启用 **${enabledTasks.length}** 个任务`,
-        `<font color='green'>成功 ${okCount}</font> · <font color='red'>失败 ${failCount}</font> · <font color='grey'>未执行 ${idleCount}</font>`,
-      ].join('\n'),
-    },
+    { tag: 'markdown', content: healthLine },
     { tag: 'hr' },
   ]
 
@@ -546,11 +629,8 @@ export function buildDailyReportCard(config: DockerConfig | null, cookieStatus?:
       header_style: { background_style: 'orange', bold: true, text_align: 'left' },
       columns: [
         { name: 'task', display_name: '任务', data_type: 'text' },
-        { name: 'schedule', display_name: '计划', data_type: 'text' },
-        { name: 'last_run', display_name: '最近执行', data_type: 'text' },
-        { name: 'duration', display_name: '耗时', data_type: 'text' },
-        { name: 'status', display_name: '结果', data_type: 'text' },
-        { name: 'detail', display_name: '摘要', data_type: 'text' },
+        { name: 'when', display_name: '执行', data_type: 'text' },
+        { name: 'result', display_name: '结果', data_type: 'text' },
       ],
       rows,
     })
@@ -558,16 +638,25 @@ export function buildDailyReportCard(config: DockerConfig | null, cookieStatus?:
     elements.push({ tag: 'markdown', content: '<font color=\'grey\'>当前没有已启用的任务</font>' })
   }
 
-  // 登录状态：放在任务表之后，单独一段
   elements.push({ tag: 'hr' })
-  elements.push(...buildCookieStatusElements(cookieStatus))
+  elements.push({
+    tag: 'markdown',
+    content: [
+      `${enabledTasks.length} 个任务 · <font color='green'>成功 ${okCount}</font>`
+      + ` · <font color='red'>失败 ${failCount}</font>`
+      + ` · <font color='grey'>未执行 ${idleCount}</font>`,
+      `<font color='grey'>🤖 douyu-keep-just-works · ${formatTime(new Date().toISOString())}</font>`,
+    ].join('\n'),
+  })
 
-  const failed = enabledTasks.filter(item => runs[item.type] && !runs[item.type]!.ok)
-  if (failed.length > 0) {
+  if (failedRecords.length > 0) {
     elements.push({ tag: 'hr' })
     elements.push({ tag: 'markdown', content: '**❌ 失败原因**' })
-    for (const item of failed) {
-      const record = runs[item.type]!
+    for (const item of enabledTasks) {
+      const record = runs[item.type]
+      if (!record || record.ok) {
+        continue
+      }
       elements.push({
         tag: 'markdown',
         content: `**${getTaskLabel(item.type)}**：<font color='red'>${(record.error || '未知错误').slice(0, 200)}</font>`,
@@ -575,18 +664,19 @@ export function buildDailyReportCard(config: DockerConfig | null, cookieStatus?:
     }
   }
 
-  elements.push({ tag: 'hr' })
-  elements.push({
-    tag: 'markdown',
-    content: `<font color='grey'>🤖 douyu-keep-just-works · 汇总时间 ${formatTime(new Date().toISOString())}</font>`,
-  })
+  const healthText = healthLine.replace(/<[^>]+>/g, '')
 
   const fallbackText = [
     `**斗鱼任务日报 ${today}**`,
-    `已启用 ${enabledTasks.length} 个任务：成功 ${okCount} · 失败 ${failCount} · 未执行 ${idleCount}`,
-    ...rows.map(row => `- ${row.task}（${row.schedule}）：${row.status} · ${row.last_run} · ${row.detail}`),
+    healthText,
+    ...rows.map(row => `- ${row.task}（${row.when}）：${row.result}`),
     '',
-    cookieStatusText(cookieStatus),
+    `${enabledTasks.length} 个任务：成功 ${okCount} · 失败 ${failCount} · 未执行 ${idleCount}`,
+    ...(failedRecords.length
+      ? ['', '失败原因：', ...enabledTasks
+          .filter(item => runs[item.type] && !runs[item.type]!.ok)
+          .map(item => `- ${getTaskLabel(item.type)}：${runs[item.type]!.error || '未知错误'}`)]
+      : []),
   ].join('\n')
 
   return {
@@ -594,7 +684,7 @@ export function buildDailyReportCard(config: DockerConfig | null, cookieStatus?:
     subtitle: `${today} · 已启用 ${enabledTasks.length} 个任务`,
     tags: [
       { text: failCount > 0 ? `❌ ${failCount} 个失败` : '✅ 全部正常', color: failCount > 0 ? 'red' : 'green' },
-      cookieStatus && !cookieStatus.error && !cookieStatus.ltp0Present
+      loginBroken
         ? { text: '🔑 登录态异常', color: 'red' }
         : { text: '每日汇总', color: 'orange' },
     ],
