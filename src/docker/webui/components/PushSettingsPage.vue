@@ -145,7 +145,7 @@ const {
             type="text"
             autocomplete="off"
             spellcheck="false"
-            placeholder="http://192.168.5.88:818"
+            placeholder="http://magicpush.example.com:818"
           >
           <div class="helper">
             填到端口即可，不要带 /api/push 后缀；留空则回退容器环境变量 MAGICPUSH_URL。
