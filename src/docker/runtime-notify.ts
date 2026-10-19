@@ -641,12 +641,9 @@ export function buildDailyReportCard(config: DockerConfig | null, cookieStatus?:
   elements.push({ tag: 'hr' })
   elements.push({
     tag: 'markdown',
-    content: [
-      `${enabledTasks.length} 个任务 · <font color='green'>成功 ${okCount}</font>`
+    content: `${enabledTasks.length} 个任务 · <font color='green'>成功 ${okCount}</font>`
       + ` · <font color='red'>失败 ${failCount}</font>`
       + ` · <font color='grey'>未执行 ${idleCount}</font>`,
-      `<font color='grey'>🤖 douyu-keep-just-works · ${formatTime(new Date().toISOString())}</font>`,
-    ].join('\n'),
   })
 
   if (failedRecords.length > 0) {
@@ -788,11 +785,6 @@ export async function sendTaskRunCard(record: TaskRunRecord, trigger: 'manual' |
     }
   }
 
-  elements.push({
-    tag: 'markdown',
-    content: `<font color='grey'>🤖 douyu-keep-just-works · ${formatTime(new Date().toISOString())}</font>`,
-  })
-
   // 折叠面板被飞书拒绝时的退路：关键数据表 + 首尾各 2 条日志（平铺）
   const plainLogs = record.logs.length > 4
     ? [...record.logs.slice(0, 2), `…中间省略 ${record.logs.length - 4} 条…`, ...record.logs.slice(-2)]
@@ -802,10 +794,6 @@ export async function sendTaskRunCard(record: TaskRunRecord, trigger: 'manual' |
     ...(plainLogs.length > 0
       ? [{ tag: 'markdown', content: '**执行日志**' }, { tag: 'markdown', content: plainLogs.map(logBullet).join('\n') }]
       : []),
-    {
-      tag: 'markdown',
-      content: `<font color='grey'>🤖 douyu-keep-just-works · ${formatTime(new Date().toISOString())}</font>`,
-    },
   ]
 
   const fallbackText = [
