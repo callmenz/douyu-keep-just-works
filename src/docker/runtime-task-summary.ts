@@ -36,6 +36,20 @@ const RE_EXPIRE = /过期时间\s*([\d-]{10} [\d:]{8})，距离过期约\s*([\d.
 const RE_GLOW_COUNT = /荧光棒数量为(\d+)/
 const RE_YUBA_DONE = /鱼吧签到任务完成: 成功\s*(\d+)，已签到\s*(\d+)，失败\s*(\d+)/
 
+/**
+ * 「任务跑了但没事可做」的日志特征 → 展示用短语。
+ * 这类情况以前统一显示「执行完成」，看不出到底是送了还是跳过了。
+ */
+const SKIP_PATTERNS: Array<[string, RegExp]> = [
+  ['无临期礼物，跳过', /当前没有进入临期阈值的可释放礼物/],
+  ['背包无库存，跳过', /当前背包没有可释放的礼物库存/],
+  ['无双倍礼物，跳过', /当前没有可用于双倍任务的限时礼物/],
+  ['无双倍房间，跳过', /未检测到可执行的双倍房间/],
+  ['未配置房间，跳过', /未勾选任何双倍卡房间/],
+  ['无关注鱼吧', /当前没有关注的鱼吧/],
+  ['今日无免费荧光棒', /荧光棒数量为0/],
+]
+
 function stripGiftId(gift: string): string {
   return gift.replace(/\(ID\s*\d+\)/g, '').trim()
 }
@@ -132,6 +146,14 @@ export function buildTaskRunSummary(record: TaskRunRecord): TaskRunSummary {
     const [, ok, already, fail] = yuba
     rows.push({ item: '签到', value: `成功 ${ok} · 已签 ${already} · 失败 ${fail}` })
     parts.push(`鱼吧签到 成功 ${ok} / 已签 ${already} / 失败 ${fail}`)
+  }
+
+  if (rows.length === 0) {
+    const skip = SKIP_PATTERNS.find(([, pattern]) => logs.some(line => pattern.test(line)))
+    if (skip) {
+      rows.push({ item: '结果', value: skip[0] })
+      parts.push(skip[0])
+    }
   }
 
   if (rows.length === 0 && record.error) {

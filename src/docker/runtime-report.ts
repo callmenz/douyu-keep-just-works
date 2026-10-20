@@ -2,7 +2,7 @@ import { CronJob } from 'cron'
 import type { DockerConfig } from '../core/types'
 import { DOCKER_TIMEZONE } from './runtime-constants'
 import { buildCookieStatus } from './runtime-cookie-status'
-import { sendDailyReport } from './runtime-notify'
+import { previousDayKey, sendDailyReport } from './runtime-notify'
 
 const REPORT_JOB_NAME = '每日推送汇总'
 
@@ -74,7 +74,8 @@ export class DockerReportScheduler {
     const config = this.deps.getConfig()
     this.deps.logSystem(`${REPORT_JOB_NAME}开始推送`)
     const cookieStatus = buildCookieStatus(config, this.deps.getConfigPath())
-    const result = await sendDailyReport(config, cookieStatus)
+    // 定时日报统计「前一天」：09:00 推送时当天的傍晚任务还没跑，只有前一天是完整的一天
+    const result = await sendDailyReport(config, cookieStatus, { dayKey: previousDayKey() })
     if (result.ok) {
       this.deps.logSystem(`${REPORT_JOB_NAME}推送完成`)
     } else {

@@ -224,23 +224,45 @@ function shanghaiDayKey(value: string | Date): string {
   }).format(date)
 }
 
-/** 取某任务今天最后一次执行记录 */
-export function getTodayLastRun(type: string): TaskRunRecord | undefined {
-  const today = shanghaiDayKey(new Date())
+/** 取某任务在指定日期（上海时区 YYYY-MM-DD）最后一次执行记录 */
+export function getLastRunOnDay(type: string, dayKey: string): TaskRunRecord | undefined {
   const list = runHistory.get(type) || []
   for (let i = list.length - 1; i >= 0; i -= 1) {
-    if (shanghaiDayKey(list[i].finishedAt) === today) {
+    if (shanghaiDayKey(list[i].finishedAt) === dayKey) {
       return list[i]
     }
   }
   return undefined
 }
 
+/** 取某任务今天最后一次执行记录 */
+export function getTodayLastRun(type: string): TaskRunRecord | undefined {
+  return getLastRunOnDay(type, shanghaiDayKey(new Date()))
+}
+
 export function getAllTodayRuns(): Record<string, TaskRunRecord | undefined> {
+  return getAllRunsForDay(shanghaiDayKey(new Date()))
+}
+
+/** 取某一天所有任务的最后一次执行记录（日期键为上海时区 YYYY-MM-DD） */
+export function getAllRunsForDay(dayKey: string): Record<string, TaskRunRecord | undefined> {
   return TASK_TYPES.reduce<Record<string, TaskRunRecord | undefined>>((acc, type) => {
-    acc[type] = getTodayLastRun(type)
+    acc[type] = getLastRunOnDay(type, dayKey)
     return acc
   }, {})
+}
+
+/** 上海时区的「今天」日期键 */
+export function currentDayKey(): string {
+  return shanghaiDayKey(new Date())
+}
+
+/**
+ * 上海时区的「前一天」日期键。
+ * 中国无夏令时，直接减 24h 再按上海时区格式化即可，不会出现跳变。
+ */
+export function previousDayKey(): string {
+  return shanghaiDayKey(new Date(Date.now() - 24 * 60 * 60 * 1000))
 }
 
 export function clearRunHistory(): void {
@@ -584,115 +606,123 @@ export function buildCookieHealthLine(
  * cron 表达式在手机上会把列宽撑开，日志末行经常是半句废话。
  * 结果列改用 buildTaskRunSummary() 抽出的结构化结论。
  */
-export function buildDailyReportCard(config: DockerConfig | null, cookieStatus?: CookieStatusSummary): { title: string, subtitle: string, tags: CardTag[], elements: CardElement[], fallbackText: string } {
+export interface DailyReportOptions {
+  /** 统计日（上海时区 YYYY-MM-DD），不传则默认「前一天」 */
+  dayKey?: string
+}
+
+/**
+ * 日报卡片（2026-10-20 定稿，用户选定模板 B：只列异常）。
+ *
+ * 为什么统计「前一天」：日报默认 09:00 推送，此时当天的 17:20/20:20/22:20/23:20
+ * 等时段任务一次都还没跑，按「今天」统计会让它们永远显示未执行；而前一天是完整的一天。
+ *
+ * 版式（极简，正常时只有两行正文）：
+ *   1. 结论行：✅ 4/4 全部成功 ／ ⚠️ 成功 3 · 失败 1 ／ ⚪ 无执行记录
+ *   2. 异常明细：只列失败与未执行的任务（全成功时整段省略）
+ *   3. 登录态健康条（实时状态，但「登录类失败」判定用统计日的记录）
+ */
+export function buildDailyReportCard(
+  config: DockerConfig | null,
+  cookieStatus?: CookieStatusSummary,
+  options?: DailyReportOptions,
+): { title: string, subtitle: string, tags: CardTag[], elements: CardElement[], fallbackText: string } {
+  const dayKey = options?.dayKey || previousDayKey()
+  const todayKey = currentDayKey()
+  const dayLabel = dayKey === todayKey ? '今日' : (dayKey === previousDayKey() ? '前一日' : '')
+
   const enabledTasks = TASK_TYPES
     .map(type => ({ type, config: getTaskConfig(config, type) }))
     .filter(item => isTaskEnabled(item.config))
 
-  const runs = getAllTodayRuns()
-  const okCount = enabledTasks.filter(item => runs[item.type]?.ok).length
-  const failCount = enabledTasks.filter(item => runs[item.type] && !runs[item.type]!.ok).length
-  const idleCount = enabledTasks.length - okCount - failCount
-  const failedRecords = enabledTasks.map(item => runs[item.type]).filter((item): item is TaskRunRecord => Boolean(item && !item.ok))
+  const runs = getAllRunsForDay(dayKey)
+  const okTasks = enabledTasks.filter(item => runs[item.type]?.ok)
+  const failedTasks = enabledTasks.filter(item => runs[item.type] && !runs[item.type]!.ok)
+  const missingTasks = enabledTasks.filter(item => !runs[item.type])
+  const failedRecords = failedTasks.map(item => runs[item.type]!)
 
-  const today = shanghaiDayKey(new Date())
-  const yubaEnabled = enabledTasks.some(item => item.type === 'yubaCheckIn')
+  const okCount = okTasks.length
+  const failCount = failedTasks.length
+  const missingCount = missingTasks.length
+  const total = enabledTasks.length
+  const nothingRan = total > 0 && okCount === 0 && failCount === 0
 
-  const rows = enabledTasks.map((item) => {
-    const record = runs[item.type]
-    if (!record) {
-      return { task: getTaskLabel(item.type), when: '—', result: '⚪ 未执行' }
-    }
-    const summary = buildTaskRunSummary(record)
-    const icon = record.ok ? '✅' : '❌'
-    return {
-      task: getTaskLabel(item.type),
-      when: formatClock(record.finishedAt),
-      result: `${icon} ${summary.headline.slice(0, 40)}`,
-    }
-  })
-
-  const healthLine = buildCookieHealthLine(cookieStatus, { failedRecords, yubaEnabled })
-  const loginBroken = failedRecords.filter(record => isLoginFailure(record)).length > 0
-    || Boolean(cookieStatus && (cookieStatus.error || !cookieStatus.ltp0Present || !cookieStatus.mainReady))
-
-  const elements: CardElement[] = [
-    { tag: 'markdown', content: healthLine },
-    { tag: 'hr' },
-  ]
-
-  if (rows.length > 0) {
-    elements.push({
-      tag: 'table',
-      page_size: 10,
-      row_height: 'low',
-      header_style: { background_style: 'orange', bold: true, text_align: 'left' },
-      columns: [
-        { name: 'task', display_name: '任务', data_type: 'text' },
-        { name: 'when', display_name: '执行', data_type: 'text' },
-        { name: 'result', display_name: '结果', data_type: 'text' },
-      ],
-      rows,
-    })
+  let headline: string
+  if (total === 0) {
+    headline = '<font color=\'grey\'>当前没有已启用的任务</font>'
+  } else if (okCount === total) {
+    headline = `✅ <font color='green'>${okCount}/${total} 全部成功</font>`
+  } else if (nothingRan) {
+    headline = `<font color='grey'>⚪ ${dayKey} 无执行记录</font>`
   } else {
-    elements.push({ tag: 'markdown', content: '<font color=\'grey\'>当前没有已启用的任务</font>' })
+    headline = `⚠️ ${total} 个任务 · <font color='green'>成功 ${okCount}</font>`
+      + (failCount > 0 ? ` · <font color='red'>失败 ${failCount}</font>` : '')
+      + (missingCount > 0 ? ` · <font color='grey'>未执行 ${missingCount}</font>` : '')
   }
 
-  elements.push({ tag: 'hr' })
-  elements.push({
-    tag: 'markdown',
-    content: `${enabledTasks.length} 个任务 · <font color='green'>成功 ${okCount}</font>`
-      + ` · <font color='red'>失败 ${failCount}</font>`
-      + ` · <font color='grey'>未执行 ${idleCount}</font>`,
-  })
+  const yubaEnabled = enabledTasks.some(item => item.type === 'yubaCheckIn')
+  const healthLine = buildCookieHealthLine(cookieStatus, { failedRecords, yubaEnabled })
 
-  if (failedRecords.length > 0) {
-    elements.push({ tag: 'hr' })
-    elements.push({ tag: 'markdown', content: '**❌ 失败原因**' })
-    for (const item of enabledTasks) {
-      const record = runs[item.type]
-      if (!record || record.ok) {
-        continue
-      }
-      elements.push({
-        tag: 'markdown',
-        content: `**${getTaskLabel(item.type)}**：<font color='red'>${(record.error || '未知错误').slice(0, 200)}</font>`,
-      })
+  const elements: CardElement[] = [{ tag: 'markdown', content: headline }]
+
+  // 异常明细：全成功或整天没跑时省略，避免刷屏
+  if (!nothingRan && (failCount > 0 || missingCount > 0)) {
+    const lines: string[] = []
+    for (const item of failedTasks) {
+      const record = runs[item.type]!
+      lines.push(`❌ ${getTaskLabel(item.type)}：<font color='red'>${(record.error || '未知错误').slice(0, 120)}</font>`)
     }
+    for (const item of missingTasks) {
+      lines.push(`⚪ ${getTaskLabel(item.type)}：<font color='grey'>未执行</font>`)
+    }
+    elements.push({ tag: 'markdown', content: lines.join('\n') })
   }
+
+  elements.push({ tag: 'markdown', content: healthLine })
 
   const healthText = healthLine.replace(/<[^>]+>/g, '')
-
+  const headlineText = headline.replace(/<[^>]+>/g, '')
   const fallbackText = [
-    `**斗鱼任务日报 ${today}**`,
+    `**斗鱼任务日报 ${dayKey}${dayLabel ? `（${dayLabel}）` : ''}**`,
+    headlineText,
+    ...failedTasks.map(item => `❌ ${getTaskLabel(item.type)}：${runs[item.type]!.error || '未知错误'}`),
+    ...(nothingRan ? [] : missingTasks.map(item => `⚪ ${getTaskLabel(item.type)}：未执行`)),
     healthText,
-    ...rows.map(row => `- ${row.task}（${row.when}）：${row.result}`),
-    '',
-    `${enabledTasks.length} 个任务：成功 ${okCount} · 失败 ${failCount} · 未执行 ${idleCount}`,
-    ...(failedRecords.length
-      ? ['', '失败原因：', ...enabledTasks
-          .filter(item => runs[item.type] && !runs[item.type]!.ok)
-          .map(item => `- ${getTaskLabel(item.type)}：${runs[item.type]!.error || '未知错误'}`)]
-      : []),
   ].join('\n')
+
+  const loginBroken = failedRecords.some(record => isLoginFailure(record))
+    || Boolean(cookieStatus && (cookieStatus.error || !cookieStatus.ltp0Present || !cookieStatus.mainReady))
+
+  const tags: CardTag[] = []
+  if (nothingRan) {
+    tags.push({ text: '⚪ 无执行记录', color: 'grey' })
+  } else if (failCount > 0) {
+    tags.push({ text: `❌ ${failCount} 个失败`, color: 'red' })
+  } else if (missingCount > 0 && !nothingRan) {
+    tags.push({ text: `⚪ ${missingCount} 个未执行`, color: 'grey' })
+  } else if (total > 0) {
+    tags.push({ text: '✅ 全部正常', color: 'green' })
+  }
+  tags.push(loginBroken
+    ? { text: '🔑 登录态异常', color: 'red' }
+    : { text: '每日汇总', color: 'orange' })
 
   return {
     title: '斗鱼任务日报',
-    subtitle: `${today} · 已启用 ${enabledTasks.length} 个任务`,
-    tags: [
-      { text: failCount > 0 ? `❌ ${failCount} 个失败` : '✅ 全部正常', color: failCount > 0 ? 'red' : 'green' },
-      loginBroken
-        ? { text: '🔑 登录态异常', color: 'red' }
-        : { text: '每日汇总', color: 'orange' },
-    ],
+    subtitle: `${dayKey}${dayLabel ? `（${dayLabel}）` : ''} · 已启用 ${total} 个任务`,
+    tags,
     elements,
     fallbackText,
   }
 }
 
 /** 立即推送一次今日汇总 */
-export async function sendDailyReport(config: DockerConfig | null, cookieStatus?: CookieStatusSummary): Promise<{ ok: boolean, error?: string }> {
-  const report = buildDailyReportCard(config, cookieStatus)
+export async function sendDailyReport(
+  config: DockerConfig | null,
+  cookieStatus?: CookieStatusSummary,
+  options?: DailyReportOptions,
+): Promise<{ ok: boolean, error?: string }> {
+  const report = buildDailyReportCard(config, cookieStatus, options)
   return await sendCard({
     title: report.title,
     subtitle: report.subtitle,

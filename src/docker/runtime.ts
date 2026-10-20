@@ -18,7 +18,7 @@ import { DockerRuntimeFansSyncService } from './runtime-fans-sync'
 import { DockerTaskScheduler } from './runtime-scheduler'
 import { createTaskRecord, getTaskConfig, hasEnabledTaskConfig, isTaskEnabled, TASK_LABELS, TASK_LOG_CATEGORIES, TASK_TYPES } from './task-metadata'
 import { buildCookieStatus } from './runtime-cookie-status'
-import { getPushChannelSettings, getTodayLastRun, initRunHistory, notifyLoginRequired, sendDailyReport, sendTestCard, setPushChannelConfig, setPushChannelResolver } from './runtime-notify'
+import { currentDayKey, getPushChannelSettings, getTodayLastRun, initRunHistory, notifyLoginRequired, sendDailyReport, sendTestCard, setPushChannelConfig, setPushChannelResolver } from './runtime-notify'
 import { DockerReportScheduler } from './runtime-report'
 import type { TaskType } from './task-metadata'
 
@@ -192,7 +192,8 @@ export function startDockerRuntime(options: DockerRuntimeOptions): void {
         }),
       }
     },
-    sendPushReportNow: async () => await sendDailyReport(currentConfig, buildCookieStatus(currentConfig, activeConfigPath)),
+    // 手动「立即推送」看当天已跑的部分（与定时日报的前一日口径区分开）
+    sendPushReportNow: async () => await sendDailyReport(currentConfig, buildCookieStatus(currentConfig, activeConfigPath), { dayKey: currentDayKey() }),
     sendPushTest: async () => await sendTestCard(),
     logSystem,
   })
