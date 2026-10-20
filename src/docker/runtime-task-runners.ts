@@ -5,6 +5,7 @@ import { MAIN_DOUYU_URL, YUBA_DOUYU_URL } from './runtime-constants'
 import { getTaskLabel, getTaskNotConfiguredMessage, createTaskRecord, getTriggerableTaskConfig } from './task-metadata'
 import type { TaskType } from './task-metadata'
 import { recordTaskRun, sendTaskRunCard } from './runtime-notify'
+import { diffIntimacy, snapshotIntimacy } from './runtime-fans-intimacy'
 
 type TaskLoggerMap = Record<TaskType, (message: string) => void>
 
@@ -29,6 +30,12 @@ const manualTriggerOptions = {
   onBusy: 'throw' as const,
   busyMessage: '任务正在执行中，请稍后再试',
 }
+
+/**
+ * 会真正送出礼物的任务。只有这些任务需要读粉丝牌算亲密度增量；
+ * 领取、鱼吧签到不发礼物，多读一次只是浪费请求。
+ */
+const GIFT_TASK_TYPES = new Set<TaskType>(['expiringGift', 'doubleCard', 'keepalive'])
 
 type RuntimeTaskRunner = (config: DockerConfig[TaskType], deps: RuntimeTaskRunnerDeps) => Promise<void>
 
@@ -89,15 +96,27 @@ export async function runRuntimeTask(
     },
   }
 
+  // 送礼类任务：执行前后各读一次粉丝牌，差值即本次亲密度增量
+  const trackIntimacy = GIFT_TASK_TYPES.has(type)
+  const beforeIntimacy = trackIntimacy
+    ? await snapshotIntimacy(deps.resolveCookieForUrl(MAIN_DOUYU_URL))
+    : null
+
   try {
     await executeRuntimeTask(type, config, recordingDeps)
-    const record = recordTaskRun({ type, ok: true, startedAt, logs: collected })
+    const intimacy = trackIntimacy
+      ? diffIntimacy(beforeIntimacy, await snapshotIntimacy(deps.resolveCookieForUrl(MAIN_DOUYU_URL)))
+      : undefined
+    const record = recordTaskRun({ type, ok: true, startedAt, logs: collected, intimacy })
     // 定时任务只记录，等每日汇总统一发；手动触发立即推送单次结果
     if (trigger === 'manual') {
       await sendTaskRunCard(record, trigger)
     }
   } catch (error: unknown) {
-    const record = recordTaskRun({ type, ok: false, startedAt, error, logs: collected })
+    const intimacy = trackIntimacy
+      ? diffIntimacy(beforeIntimacy, await snapshotIntimacy(deps.resolveCookieForUrl(MAIN_DOUYU_URL)))
+      : undefined
+    const record = recordTaskRun({ type, ok: false, startedAt, error, logs: collected, intimacy })
     if (trigger === 'manual') {
       await sendTaskRunCard(record, trigger)
     }

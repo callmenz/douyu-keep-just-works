@@ -292,6 +292,22 @@ export interface PushReportConfig {
 }
 
 /** 一次任务执行记录，用于汇总推送与 WebUI 展示 */
+/** 单次送礼任务里某个房间的亲密度变化（任务前后各读一次粉丝牌得出） */
+export interface TaskRunIntimacy {
+  roomId: string
+  /** 主播名，取粉丝牌列表里的名字 */
+  name: string
+  level: number
+  /** 当前亲密度（intimacy 字段 "/" 前那段） */
+  current: number
+  /** 升级门槛（intimacy 字段 "/" 后那段） */
+  threshold: number
+  /** 本次任务带来的亲密度增量 */
+  delta: number
+  /** 本次任务是否发生了升级 */
+  levelUp: boolean
+}
+
 export interface TaskRunRecord {
   type: string
   label: string
@@ -300,6 +316,8 @@ export interface TaskRunRecord {
   ok: boolean
   error?: string
   logs: string[]
+  /** 送礼类任务的亲密度变化；非送礼任务或读取失败时缺省 */
+  intimacy?: TaskRunIntimacy[]
 }
 
 /** 汇总推送里展示的登录态摘要 */

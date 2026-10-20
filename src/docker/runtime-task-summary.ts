@@ -54,7 +54,7 @@ function stripGiftId(gift: string): string {
   return gift.replace(/\(ID\s*\d+\)/g, '').trim()
 }
 
-function collectDeliveries(logs: string[]): {
+export function collectDeliveries(logs: string[]): {
   delivered: GiftDelivery[]
   failed: Array<{ roomId: string, count: number }>
 } {

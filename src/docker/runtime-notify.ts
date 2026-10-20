@@ -1,11 +1,11 @@
-import type { CookieStatusSummary, DockerConfig, PushChannelConfig, TaskRunRecord } from '../core/types'
+import type { CookieStatusSummary, DockerConfig, PushChannelConfig, TaskRunIntimacy, TaskRunRecord } from '../core/types'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import process from 'node:process'
 import axios from 'axios'
 import { errorMessage } from '../core/errors'
 import { getTaskConfig, getTaskLabel, isTaskEnabled, TASK_TYPES } from './task-metadata'
-import { buildTaskRunSummary } from './runtime-task-summary'
+import { buildTaskRunSummary, collectDeliveries } from './runtime-task-summary'
 import type { TaskType } from './task-metadata'
 
 /**
@@ -193,6 +193,7 @@ export function recordTaskRun(args: {
   startedAt: string
   error?: unknown
   logs: string[]
+  intimacy?: TaskRunIntimacy[]
 }): TaskRunRecord {
   const record: TaskRunRecord = {
     type: args.type,
@@ -202,6 +203,7 @@ export function recordTaskRun(args: {
     ok: args.ok,
     error: args.error === undefined ? undefined : errorMessage(args.error),
     logs: args.logs.slice(-MAX_LOGS_PER_RUN),
+    ...(args.intimacy && args.intimacy.length > 0 ? { intimacy: args.intimacy } : {}),
   }
   const list = runHistory.get(args.type) || []
   list.push(record)
@@ -242,6 +244,22 @@ export function getTodayLastRun(type: string): TaskRunRecord | undefined {
 
 export function getAllTodayRuns(): Record<string, TaskRunRecord | undefined> {
   return getAllRunsForDay(shanghaiDayKey(new Date()))
+}
+
+/**
+ * 取某一天的全部执行记录（不只是每个任务最后一次）。
+ * 日报里的「赠送明细」需要把一天里 4 次双倍卡都算进去，只用最后一次会少算。
+ */
+export function getAllRecordsForDay(dayKey: string): TaskRunRecord[] {
+  const all: TaskRunRecord[] = []
+  for (const list of runHistory.values()) {
+    for (const record of list) {
+      if (shanghaiDayKey(record.finishedAt) === dayKey) {
+        all.push(record)
+      }
+    }
+  }
+  return all.sort((a, b) => a.finishedAt.localeCompare(b.finishedAt))
 }
 
 /** 取某一天所有任务的最后一次执行记录（日期键为上海时区 YYYY-MM-DD） */
@@ -606,6 +624,82 @@ export function buildCookieHealthLine(
  * cron 表达式在手机上会把列宽撑开，日志末行经常是半句废话。
  * 结果列改用 buildTaskRunSummary() 抽出的结构化结论。
  */
+/** 亲密度数字格式化：整数不显示小数，带小数保留一位 */
+function formatDelta(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1)
+}
+
+interface RoomGiftSummary {
+  roomId: string
+  name: string
+  count: number
+  delta: number
+  level: number
+  current: number
+  threshold: number
+  levelUp: boolean
+}
+
+/**
+ * 汇总某一天的赠送明细（按房间）。
+ *
+ * 数量从每条记录的日志里解析（一次任务可能向多个房间送），
+ * 亲密度增量来自记录里的 intimacy 快照差值；历史记录没有快照时只显示数量。
+ */
+function buildGiftSummary(dayKey: string): RoomGiftSummary[] {
+  const records = getAllRecordsForDay(dayKey)
+  const map = new Map<string, RoomGiftSummary>()
+
+  for (const record of records) {
+    const { delivered } = collectDeliveries(record.logs || [])
+    for (const item of delivered) {
+      const existing = map.get(item.roomId)
+      if (existing) {
+        existing.count += item.count
+      } else {
+        map.set(item.roomId, {
+          roomId: item.roomId,
+          name: item.roomId,
+          count: item.count,
+          delta: 0,
+          level: 0,
+          current: 0,
+          threshold: 0,
+          levelUp: false,
+        })
+      }
+    }
+
+    for (const intimacy of record.intimacy || []) {
+      const existing = map.get(intimacy.roomId)
+      if (existing) {
+        existing.delta += intimacy.delta
+        existing.name = intimacy.name || existing.name
+        // 用当天最后一条记录的状态作为等级/进度
+        existing.level = intimacy.level
+        existing.current = intimacy.current
+        existing.threshold = intimacy.threshold
+        existing.levelUp = existing.levelUp || intimacy.levelUp
+      } else {
+        map.set(intimacy.roomId, {
+          roomId: intimacy.roomId,
+          name: intimacy.name || intimacy.roomId,
+          count: 0,
+          delta: intimacy.delta,
+          level: intimacy.level,
+          current: intimacy.current,
+          threshold: intimacy.threshold,
+          levelUp: intimacy.levelUp,
+        })
+      }
+    }
+  }
+
+  return Array.from(map.values())
+    .filter(room => room.count > 0 || room.delta > 0)
+    .sort((a, b) => b.count - a.count)
+}
+
 export interface DailyReportOptions {
   /** 统计日（上海时区 YYYY-MM-DD），不传则默认「前一天」 */
   dayKey?: string
@@ -665,6 +759,30 @@ export function buildDailyReportCard(
 
   const elements: CardElement[] = [{ tag: 'markdown', content: headline }]
 
+  // 赠送明细：按房间汇总当天所有送礼记录（含同任务多次执行）
+  const giftSummary = buildGiftSummary(dayKey)
+  if (giftSummary.length > 0) {
+    const lines: string[] = ['**🎁 赠送明细**']
+    for (const room of giftSummary) {
+      // 历史记录里没有主播名（亲密度快照是后来才加的），此时退回房间号，不要显示成「84452（84452）」
+      const roomTitle = room.name && room.name !== room.roomId
+        ? `${room.name}（${room.roomId}）`
+        : `直播间 ${room.roomId}`
+      lines.push(`**${roomTitle}**`)
+      const parts = [`荧光棒 ${room.count} 个`]
+      if (room.delta > 0) {
+        parts.push(`亲密度 +${formatDelta(room.delta)}`)
+      }
+      lines.push(parts.join(' · '))
+      if (room.level > 0) {
+        const levelText = room.levelUp ? `${room.level} 级（升级）` : `${room.level} 级`
+        const progress = room.threshold > 0 ? ` · ${formatDelta(room.current)}/${formatDelta(room.threshold)}` : ''
+        lines.push(`<font color='grey'>${levelText}${progress}</font>`)
+      }
+    }
+    elements.push({ tag: 'markdown', content: lines.join('\n') })
+  }
+
   // 异常明细：全成功或整天没跑时省略，避免刷屏
   if (!nothingRan && (failCount > 0 || missingCount > 0)) {
     const lines: string[] = []
@@ -682,9 +800,23 @@ export function buildDailyReportCard(
 
   const healthText = healthLine.replace(/<[^>]+>/g, '')
   const headlineText = headline.replace(/<[^>]+>/g, '')
+  const giftText = giftSummary.length > 0
+    ? giftSummary.map((room) => {
+        const parts = [`荧光棒 ${room.count} 个`]
+        if (room.delta > 0) {
+          parts.push(`亲密度 +${formatDelta(room.delta)}`)
+        }
+        const levelText = room.level > 0
+          ? ` · ${room.levelUp ? `${room.level} 级（升级）` : `${room.level} 级`}${room.threshold > 0 ? ` ${formatDelta(room.current)}/${formatDelta(room.threshold)}` : ''}`
+          : ''
+        const roomTitle = room.name && room.name !== room.roomId ? `${room.name}（${room.roomId}）` : `直播间 ${room.roomId}`
+        return `🎁 ${roomTitle}：${parts.join(' · ')}${levelText}`
+      })
+    : []
   const fallbackText = [
     `**斗鱼任务日报 ${dayKey}${dayLabel ? `（${dayLabel}）` : ''}**`,
     headlineText,
+    ...giftText,
     ...failedTasks.map(item => `❌ ${getTaskLabel(item.type)}：${runs[item.type]!.error || '未知错误'}`),
     ...(nothingRan ? [] : missingTasks.map(item => `⚪ ${getTaskLabel(item.type)}：未执行`)),
     healthText,
