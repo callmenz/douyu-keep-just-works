@@ -2,8 +2,7 @@ FROM node:24-slim AS deps
 
 WORKDIR /app
 
-ENV PUPPETEER_SKIP_DOWNLOAD=true \
-    npm_config_registry=https://registry.npmmirror.com
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 
 COPY package.json package-lock.json tsconfig.docker.json tsconfig.webui.json vite.config.ts ./
 RUN npm ci --ignore-scripts --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000

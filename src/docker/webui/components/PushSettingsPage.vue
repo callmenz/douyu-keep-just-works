@@ -131,8 +131,8 @@ const {
             <input v-model="channelEnabled" type="checkbox">
             <span>启用推送渠道</span>
           </label>
-          <span v-if="channel" class="pill" :class="channel.source === 'none' ? 'warn' : 'ok'">
-            {{ channel.source === 'config' ? '界面配置生效' : channel.source === 'env' ? '环境变量生效' : '未配置' }}
+          <span v-if="channel" class="pill" :class="channel.source === 'config' || channel.source === 'env' ? 'ok' : 'warn'">
+            {{ channel.source === 'config' ? '界面配置生效' : channel.source === 'env' ? '环境变量生效' : channel.source === 'disabled' ? '已禁用' : '未配置' }}
           </span>
         </div>
 
@@ -171,8 +171,12 @@ const {
         <div class="field-block">
           <label class="field-label" for="push-channel-mode">消息格式</label>
           <select id="push-channel-mode" v-model="channelMode" name="push-channel-mode">
-            <option value="card">飞书交互卡片（推荐，橙色主题）</option>
-            <option value="text">Markdown 文本</option>
+            <option value="card">
+              飞书交互卡片（推荐，橙色主题）
+            </option>
+            <option value="text">
+              Markdown 文本
+            </option>
           </select>
           <div class="helper">
             卡片被飞书拒收时会自动降级为文本重发，通知不会丢。
@@ -404,6 +408,7 @@ const {
 @media (max-width:900px){
   .push-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
   .cookie-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .table-shell{overflow-x:auto;}
 }
 @media (max-width:560px){
   .push-summary-grid,

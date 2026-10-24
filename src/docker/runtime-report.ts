@@ -60,7 +60,10 @@ export class DockerReportScheduler {
 
     try {
       this.job = new CronJob(cron, () => {
-        void this.run()
+        // cron 回调里的 rejection 不会有人接，必须在这里兜住，避免整个进程收到未捕获异常
+        void this.run().catch((error: unknown) => {
+          this.deps.logSystem(`${REPORT_JOB_NAME}推送异常: ${error instanceof Error ? error.message : String(error)}`)
+        })
       }, null, false, DOCKER_TIMEZONE)
       this.job.start()
       this.deps.logSystem(`${REPORT_JOB_NAME}已启动, cron: ${cron}, 下次执行: ${formatScheduleForLog(this.job.nextDate()?.toISO() ?? undefined)}`)
@@ -74,7 +77,7 @@ export class DockerReportScheduler {
     const config = this.deps.getConfig()
     this.deps.logSystem(`${REPORT_JOB_NAME}开始推送`)
     const cookieStatus = buildCookieStatus(config, this.deps.getConfigPath())
-    // 定时日报统计「前一天」：09:00 推送时当天的傍晚任务还没跑，只有前一天是完整的一天
+    // 定时日报统计「前一天」：默认 09:00 推送，当天任务基本还没跑，只有前一天是完整的一天
     const result = await sendDailyReport(config, cookieStatus, { dayKey: previousDayKey() })
     if (result.ok) {
       this.deps.logSystem(`${REPORT_JOB_NAME}推送完成`)

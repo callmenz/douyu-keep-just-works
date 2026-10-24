@@ -6,6 +6,7 @@ import { getTaskLabel, getTaskNotConfiguredMessage, createTaskRecord, getTrigger
 import type { TaskType } from './task-metadata'
 import { recordTaskRun, sendTaskRunCard } from './runtime-notify'
 import { diffIntimacy, snapshotIntimacy } from './runtime-fans-intimacy'
+import type { IntimacySnapshot } from './runtime-fans-intimacy'
 
 type TaskLoggerMap = Record<TaskType, (message: string) => void>
 
@@ -36,6 +37,19 @@ const manualTriggerOptions = {
  * 领取、鱼吧签到不发礼物，多读一次只是浪费请求。
  */
 const GIFT_TASK_TYPES = new Set<TaskType>(['expiringGift', 'doubleCard', 'keepalive'])
+
+/**
+ * 读取亲密度快照。cookie 解析失败、网络失败都只返回 null。
+ * 亲密度只是附加信息：既不能阻止任务执行，也不能阻止失败记录落盘，
+ * 更不能把原始任务错误替换成「请先配置 cookie」。
+ */
+async function safeSnapshotIntimacy(resolveCookie: () => string): Promise<IntimacySnapshot | null> {
+  try {
+    return await snapshotIntimacy(resolveCookie())
+  } catch {
+    return null
+  }
+}
 
 type RuntimeTaskRunner = (config: DockerConfig[TaskType], deps: RuntimeTaskRunnerDeps) => Promise<void>
 
@@ -99,13 +113,13 @@ export async function runRuntimeTask(
   // 送礼类任务：执行前后各读一次粉丝牌，差值即本次亲密度增量
   const trackIntimacy = GIFT_TASK_TYPES.has(type)
   const beforeIntimacy = trackIntimacy
-    ? await snapshotIntimacy(deps.resolveCookieForUrl(MAIN_DOUYU_URL))
+    ? await safeSnapshotIntimacy(() => deps.resolveCookieForUrl(MAIN_DOUYU_URL))
     : null
 
   try {
     await executeRuntimeTask(type, config, recordingDeps)
     const intimacy = trackIntimacy
-      ? diffIntimacy(beforeIntimacy, await snapshotIntimacy(deps.resolveCookieForUrl(MAIN_DOUYU_URL)))
+      ? diffIntimacy(beforeIntimacy, await safeSnapshotIntimacy(() => deps.resolveCookieForUrl(MAIN_DOUYU_URL)))
       : undefined
     const record = recordTaskRun({ type, ok: true, startedAt, logs: collected, intimacy })
     // 定时任务只记录，等每日汇总统一发；手动触发立即推送单次结果
@@ -114,7 +128,7 @@ export async function runRuntimeTask(
     }
   } catch (error: unknown) {
     const intimacy = trackIntimacy
-      ? diffIntimacy(beforeIntimacy, await snapshotIntimacy(deps.resolveCookieForUrl(MAIN_DOUYU_URL)))
+      ? diffIntimacy(beforeIntimacy, await safeSnapshotIntimacy(() => deps.resolveCookieForUrl(MAIN_DOUYU_URL)))
       : undefined
     const record = recordTaskRun({ type, ok: false, startedAt, error, logs: collected, intimacy })
     if (trigger === 'manual') {

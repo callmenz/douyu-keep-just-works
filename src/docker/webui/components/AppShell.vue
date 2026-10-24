@@ -16,7 +16,7 @@ import SidebarNav from './SidebarNav.vue'
 import TopToolbar from './TopToolbar.vue'
 import YubaPage from './YubaPage.vue'
 
-const props = defineProps<{
+defineProps<{
   activePageMeta: WebUiPageMeta
   activeTab: WebUiPageTab
   appName: string

@@ -39,14 +39,28 @@ function passwordStrength(password: string): { level: 'weak' | 'medium' | 'stron
     return { level: 'weak', text: '' }
   }
   let score = 0
-  if (password.length >= 8) score += 1
-  if (password.length >= 12) score += 1
-  if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score += 1
-  if (/\d/.test(password)) score += 1
-  if (/[^A-Za-z0-9]/.test(password)) score += 1
+  if (password.length >= 8) {
+    score += 1
+  }
+  if (password.length >= 12) {
+    score += 1
+  }
+  if (/[a-z]/.test(password) && /[A-Z]/.test(password)) {
+    score += 1
+  }
+  if (/\d/.test(password)) {
+    score += 1
+  }
+  if (/[^A-Z0-9]/i.test(password)) {
+    score += 1
+  }
 
-  if (score <= 1) return { level: 'weak', text: '强度：弱' }
-  if (score <= 3) return { level: 'medium', text: '强度：中' }
+  if (score <= 1) {
+    return { level: 'weak', text: '强度：弱' }
+  }
+  if (score <= 3) {
+    return { level: 'medium', text: '强度：中' }
+  }
   return { level: 'strong', text: '强度：强' }
 }
 

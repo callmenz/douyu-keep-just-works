@@ -23,7 +23,7 @@
   },
   "pushReport": {
     "enabled": true,
-    "cron": "0 0 22 * * *"
+    "cron": "0 0 9 * * *"
   },
   "collectGift": {
     "enabled": true,

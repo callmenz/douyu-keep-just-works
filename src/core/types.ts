@@ -352,8 +352,8 @@ export interface PushReportSnapshot {
     mode: 'card' | 'text'
     tokenSet: boolean
     tokenPreview: string
-    /** 生效来源：config 表示界面里配的，env 表示环境变量 */
-    source: 'config' | 'env' | 'none'
+    /** 生效来源：config 表示界面里配的，env 表示环境变量，disabled 表示已在界面显式关闭 */
+    source: 'config' | 'env' | 'none' | 'disabled'
   }
   tasks: Array<{
     type: string

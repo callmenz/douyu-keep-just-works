@@ -9,6 +9,10 @@ defineProps<{
   submittingLogin: boolean
 }>()
 
+const emit = defineEmits<{
+  submit: []
+  'update:password': [value: string]
+}>()
 // 密码提示：未登录也能读，默认折叠，点开才显示
 const hint = ref('')
 const hintOpen = ref(false)
@@ -21,11 +25,6 @@ onMounted(async () => {
     // 没有提示或接口不可用时静默，不影响登录
   }
 })
-
-const emit = defineEmits<{
-  submit: []
-  'update:password': [value: string]
-}>()
 
 // 密码明文显示：点右侧眼睛切换，偏好存 localStorage（下次进来仍是上次的状态）
 const SHOW_PASSWORD_KEY = 'douyu.keep.showPassword'

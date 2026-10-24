@@ -30,8 +30,8 @@ interface GiftDelivery {
 }
 
 const RE_DELIVERED = /^赠送(\d+)房间(\d+)个(.+?)(?:成功)?$/
-const RE_DELIVERING = /^即将赠送(\d+)房间(\d+)个(.+?)$/
-const RE_DELIVER_FAILED = /^(\d+)房间赠送失败.*?(\d+)个(.+?)(?:自动移交|$)/
+const RE_DELIVERING = /^即将赠送(\d+)房间(\d+)个(.+)$/
+const RE_DELIVER_FAILED = /^(\d+)房间赠送失败.*,\s*(\d+)个/
 const RE_EXPIRE = /过期时间\s*([\d-]{10} [\d:]{8})，距离过期约\s*([\d.]+)\s*小时/
 const RE_GLOW_COUNT = /荧光棒数量为(\d+)/
 const RE_YUBA_DONE = /鱼吧签到任务完成: 成功\s*(\d+)，已签到\s*(\d+)，失败\s*(\d+)/

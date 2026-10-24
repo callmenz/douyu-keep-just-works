@@ -31,9 +31,7 @@ const taskLoggers: Record<TaskType, (message: string) => void> = createTaskRecor
 const runtimeCache = new DockerRuntimeCache()
 const cookieSource = new DockerCookieSourceManager({
   getConfig: () => currentConfig,
-  setConfig: (config) => {
-    currentConfig = config
-  },
+  setConfig: updateCurrentConfig,
   getConfigPath: () => activeConfigPath,
   applyConfig,
   clearFansListCache: () => runtimeCache.clearFansList(),
@@ -63,6 +61,17 @@ const reportScheduler = new DockerReportScheduler({
   logSystem,
 })
 
+/**
+ * 所有配置变更都从这里落地。
+ * 界面偏好（例如 pushReport）不会走 applyConfig，如果只在 runtimeConfigService 里
+ * reconcile 推送调度器，修改推送时间后要重启才生效。
+ */
+function updateCurrentConfig(config: DockerConfig): void {
+  currentConfig = config
+  setPushChannelConfig(config.pushChannel)
+  reportScheduler.reconcile(config)
+}
+
 const cookieCloudSync = new DockerCookieCloudSyncService({
   hasCookieCloudSource: config => cookieSource.hasCookieCloudSource(config),
   logSystem,
@@ -78,12 +87,8 @@ const runtimeConfigService = new DockerRuntimeConfigService({
   logSystem,
   logTaskReloadSummary: (reason, summary) => scheduler.logTaskReloadSummary(reason, summary),
   reconcileCookieCloudSync: (prevConfig, nextConfig) => cookieCloudSync.reconcile(prevConfig, nextConfig),
-  reconcilePushChannel: nextConfig => setPushChannelConfig(nextConfig.pushChannel),
-  reconcilePushReport: nextConfig => reportScheduler.reconcile(nextConfig),
   reconcileTaskJobs: (prevConfig, nextConfig, hasCookieSource) => scheduler.reconcileTaskJobs(prevConfig, nextConfig, hasCookieSource),
-  setCurrentConfig: (config) => {
-    currentConfig = config
-  },
+  setCurrentConfig: updateCurrentConfig,
   stopTaskJobs: () => scheduler.stopJobs(),
 })
 
@@ -146,9 +151,7 @@ export function startDockerRuntime(options: DockerRuntimeOptions): void {
     passwordStore,
     getCurrentConfig: () => currentConfig,
     getConfigPath: () => activeConfigPath,
-    setCurrentConfig: (config) => {
-      currentConfig = config
-    },
+    setCurrentConfig: updateCurrentConfig,
     saveConfig: saveConfigToDisk,
     applyConfig,
     hasConfiguredCookieSource: config => cookieSource.hasConfiguredCookieSource(config),
@@ -192,7 +195,7 @@ export function startDockerRuntime(options: DockerRuntimeOptions): void {
         }),
       }
     },
-    // 手动「立即推送」看当天已跑的部分（与定时日报的前一日口径区分开）
+    // 手动「立即推送」看当天已跑的部分；定时日报（默认 09:00）统计前一天，口径不同
     sendPushReportNow: async () => await sendDailyReport(currentConfig, buildCookieStatus(currentConfig, activeConfigPath), { dayKey: currentDayKey() }),
     sendPushTest: async () => await sendTestCard(),
     logSystem,

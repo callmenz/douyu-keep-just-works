@@ -39,8 +39,8 @@ function ensureFileMode(file: string, mode: number): void {
 const SCRUB_RULES: Array<[RegExp, string]> = [
   // 顺序有讲究：先处理「值里带空格」的形态（Bearer xxx），
   // 否则通用键规则会先把 "Bearer" 这个词当成值替换掉，真正的 token 反而留在明文里。
-  [/(Bearer\s+)[A-Za-z0-9._-]{12,}/gi, '$1***'],
-  [/(github_pat_)[A-Za-z0-9_]{10,}/g, '$1***'],
+  [/(Bearer\s+)[\w.-]{12,}/gi, '$1***'],
+  [/(github_pat_)\w{10,}/g, '$1***'],
   // 斗鱼各类 cookie：LTP0=xxx; acf_auth=xxx ...
   [/((?:LTP0|dy_did|dy_auth|acf_auth|acf_stk|acf_ltkid|acf_uid|acf_biz|acf_ct|acf_yb_auth|acf_yb_uid|acf_yb_t|acf_dmjwt_token|acf_username)\s*=\s*)([^;,\s"']+)/gi, '$1***'],
   // 通用敏感键

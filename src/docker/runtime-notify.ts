@@ -4,6 +4,8 @@ import * as path from 'node:path'
 import process from 'node:process'
 import axios from 'axios'
 import { errorMessage } from '../core/errors'
+import { getNextCronRuns } from './cron'
+import { scrubSensitive } from './logger'
 import { getTaskConfig, getTaskLabel, isTaskEnabled, TASK_TYPES } from './task-metadata'
 import { buildTaskRunSummary, collectDeliveries } from './runtime-task-summary'
 import type { TaskType } from './task-metadata'
@@ -27,7 +29,7 @@ interface MagicPushSettings {
   baseUrl: string
   token: string
   mode: 'card' | 'text'
-  source: 'config' | 'env' | 'none'
+  source: 'config' | 'env'
 }
 
 let channelConfig: PushChannelConfig | null = null
@@ -54,25 +56,46 @@ function currentChannelConfig(): PushChannelConfig | null {
 }
 
 /** 当前生效的渠道来源，供 WebUI 展示 */
-export function getPushChannelSource(): 'config' | 'env' | 'none' {
-  const settings = readMagicPushSettings()
-  return settings ? settings.source : 'none'
+export interface PushChannelSettingsView {
+  enabled: boolean
+  baseUrl: string
+  mode: 'card' | 'text'
+  tokenSet: boolean
+  tokenPreview: string
+  source: 'config' | 'env' | 'none' | 'disabled'
 }
 
-export function getPushChannelSettings(): { enabled: boolean, baseUrl: string, mode: 'card' | 'text', tokenSet: boolean, tokenPreview: string, source: 'config' | 'env' | 'none' } {
+function previewToken(token: string): string {
+  return token.length > 8 ? `${token.slice(0, 4)}****${token.slice(-4)}` : '****'
+}
+
+export function getPushChannelSettings(): PushChannelSettingsView {
   const activeConfig = currentChannelConfig()
   const enabled = activeConfig ? activeConfig.enabled !== false : true
+
+  // 显式禁用：仍返回表单可编辑的值，但不再回退环境变量
+  if (activeConfig && activeConfig.enabled === false) {
+    const token = (activeConfig.token || '').trim()
+    return {
+      enabled: false,
+      baseUrl: (activeConfig.baseUrl || '').trim().replace(/\/+$/, ''),
+      mode: activeConfig.mode === 'text' ? 'text' : 'card',
+      tokenSet: Boolean(token),
+      tokenPreview: token ? previewToken(token) : '',
+      source: 'disabled',
+    }
+  }
+
   const settings = readMagicPushSettings()
   if (!settings) {
     return { enabled, baseUrl: '', mode: 'card', tokenSet: false, tokenPreview: '', source: 'none' }
   }
-  const token = settings.token
   return {
     enabled,
     baseUrl: settings.baseUrl,
     mode: settings.mode,
-    tokenSet: Boolean(token),
-    tokenPreview: token.length > 8 ? `${token.slice(0, 4)}****${token.slice(-4)}` : '****',
+    tokenSet: Boolean(settings.token),
+    tokenPreview: previewToken(settings.token),
     source: settings.source,
   }
 }
@@ -87,7 +110,13 @@ export type CardElement = Record<string, unknown>
 function readMagicPushSettings(): MagicPushSettings | null {
   // 界面里配的渠道优先，其次环境变量；两边都没配则视为未配置
   const fromConfig = currentChannelConfig()
-  if (fromConfig && fromConfig.enabled !== false) {
+
+  // 显式关闭：不允许回退到环境变量，否则界面上的开关等于无效
+  if (fromConfig && fromConfig.enabled === false) {
+    return null
+  }
+
+  if (fromConfig) {
     const baseUrl = (fromConfig.baseUrl || '').trim().replace(/\/+$/, '')
     const token = (fromConfig.token || '').trim()
     if (baseUrl && token) {
@@ -201,8 +230,9 @@ export function recordTaskRun(args: {
     startedAt: args.startedAt,
     finishedAt: nowIso(),
     ok: args.ok,
-    error: args.error === undefined ? undefined : errorMessage(args.error),
-    logs: args.logs.slice(-MAX_LOGS_PER_RUN),
+    error: args.error === undefined ? undefined : scrubSensitive(errorMessage(args.error)),
+    // 日志和错误都会进落盘历史、WebUI 和飞书卡片，统一在入口脱敏
+    logs: args.logs.slice(-MAX_LOGS_PER_RUN).map(line => scrubSensitive(line)),
     ...(args.intimacy && args.intimacy.length > 0 ? { intimacy: args.intimacy } : {}),
   }
   const list = runHistory.get(args.type) || []
@@ -496,19 +526,6 @@ export function buildCookieStatusElements(status: CookieStatusSummary | undefine
   return elements
 }
 
-function cookieStatusText(status: CookieStatusSummary | undefined): string {
-  if (!status) {
-    return '登录状态：未获取'
-  }
-  if (status.error) {
-    return `登录状态：读取失败（${status.error}）`
-  }
-  return [
-    `登录状态：LTP0 ${status.ltp0Present ? '正常' : '缺失'} · 主站 ${status.mainReady ? '正常' : '不完整'} · 鱼吧 ${status.yubaReady ? '正常' : '不完整'}`,
-    `Cookie 数量 ${status.cookieCount}${status.updatedAt ? ` · 快照更新 ${formatTime(status.updatedAt)}` : ''}`,
-  ].join('；')
-}
-
 async function sendText(url: string, title: string, content: string): Promise<{ ok: boolean, error?: string }> {
   try {
     const resp = await axios.post(url, {
@@ -526,36 +543,6 @@ async function sendText(url: string, title: string, content: string): Promise<{ 
 }
 
 // ---------------------------------------------------------------- 每日汇总
-
-function statusLabel(record: TaskRunRecord | undefined): { text: string, color: string } {
-  if (!record) {
-    return { text: '今日未执行', color: 'grey' }
-  }
-  return record.ok ? { text: '成功', color: 'green' } : { text: '失败', color: 'red' }
-}
-
-function lastLogLine(record: TaskRunRecord | undefined): string {
-  if (!record) {
-    return '—'
-  }
-  const line = record.logs[record.logs.length - 1]
-  return line ? line.replace(/\|/g, '\\|').slice(0, 60) : '—'
-}
-
-/** 构造「今日任务执行汇总」卡片 */
-/** 只有时间（HH:mm），日报里表头已经写了「执行」，日期是摘要行 */
-function formatClock(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return '—'
-  }
-  return new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Asia/Shanghai',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(date)
-}
 
 /**
  * 登录类失败的特征词。斗鱼失效时的报错文案在不同链路不一样
@@ -705,15 +692,28 @@ export interface DailyReportOptions {
   dayKey?: string
 }
 
+/** 这个任务今天还有没有尚未到点的执行计划 */
+function hasLaterRunOnDay(cron: string | undefined, dayKey: string): boolean {
+  if (!cron) {
+    return false
+  }
+  try {
+    return getNextCronRuns(cron, 5).some(run => shanghaiDayKey(run) === dayKey)
+  } catch {
+    return false
+  }
+}
+
 /**
  * 日报卡片（2026-10-20 定稿，用户选定模板 B：只列异常）。
  *
- * 为什么统计「前一天」：日报默认 09:00 推送，此时当天的 17:20/20:20/22:20/23:20
- * 等时段任务一次都还没跑，按「今天」统计会让它们永远显示未执行；而前一天是完整的一天。
+ * 两种调用口径：
+ *   - 定时推送（默认 09:00）统计「前一天」：此时当天任务基本还没跑，只有前一天是完整的一天；
+ *   - 「立即推送今日汇总」统计「当天」：当天还没到点的任务标成「待执行」，不算「未执行」。
  *
  * 版式（极简，正常时只有两行正文）：
- *   1. 结论行：✅ 4/4 全部成功 ／ ⚠️ 成功 3 · 失败 1 ／ ⚪ 无执行记录
- *   2. 异常明细：只列失败与未执行的任务（全成功时整段省略）
+ *   1. 结论行：✅ 4/4 全部成功 ／ ⚠️ 成功 3 · 失败 1 · 待执行 1 ／ ⚪ 暂无执行记录
+ *   2. 异常明细：只列失败与未执行的任务（全成功时整段省略）；待执行单独一行
  *   3. 登录态健康条（实时状态，但「登录类失败」判定用统计日的记录）
  */
 export function buildDailyReportCard(
@@ -732,26 +732,40 @@ export function buildDailyReportCard(
   const runs = getAllRunsForDay(dayKey)
   const okTasks = enabledTasks.filter(item => runs[item.type]?.ok)
   const failedTasks = enabledTasks.filter(item => runs[item.type] && !runs[item.type]!.ok)
-  const missingTasks = enabledTasks.filter(item => !runs[item.type])
+  const pendingTypes = new Set(
+    enabledTasks
+      .filter(item => !runs[item.type] && hasLaterRunOnDay(item.config?.cron, dayKey))
+      .map(item => item.type),
+  )
+  const pendingTasks = enabledTasks.filter(item => pendingTypes.has(item.type))
+  const missingTasks = enabledTasks.filter(item => !runs[item.type] && !pendingTypes.has(item.type))
   const failedRecords = failedTasks.map(item => runs[item.type]!)
 
   const okCount = okTasks.length
   const failCount = failedTasks.length
+  const pendingCount = pendingTasks.length
   const missingCount = missingTasks.length
   const total = enabledTasks.length
   const nothingRan = total > 0 && okCount === 0 && failCount === 0
+  const allPending = nothingRan && pendingCount === total
 
   let headline: string
   if (total === 0) {
     headline = '<font color=\'grey\'>当前没有已启用的任务</font>'
   } else if (okCount === total) {
     headline = `✅ <font color='green'>${okCount}/${total} 全部成功</font>`
+  } else if (allPending) {
+    headline = `<font color='grey'>⏳ ${dayKey} 的任务将在稍后执行</font>`
   } else if (nothingRan) {
-    headline = `<font color='grey'>⚪ ${dayKey} 无执行记录</font>`
+    headline = `<font color='grey'>⚪ ${dayKey} 暂无已完成任务</font>${
+      pendingCount > 0 ? ` · <font color='orange'>待执行 ${pendingCount}</font>` : ''
+    }${missingCount > 0 ? ` · <font color='grey'>未执行 ${missingCount}</font>` : ''}`
   } else {
-    headline = `⚠️ ${total} 个任务 · <font color='green'>成功 ${okCount}</font>`
-      + (failCount > 0 ? ` · <font color='red'>失败 ${failCount}</font>` : '')
-      + (missingCount > 0 ? ` · <font color='grey'>未执行 ${missingCount}</font>` : '')
+    headline = `⚠️ ${total} 个任务 · <font color='green'>成功 ${okCount}</font>${
+      failCount > 0 ? ` · <font color='red'>失败 ${failCount}</font>` : ''
+    }${pendingCount > 0 ? ` · <font color='orange'>待执行 ${pendingCount}</font>` : ''}${
+      missingCount > 0 ? ` · <font color='grey'>未执行 ${missingCount}</font>` : ''
+    }`
   }
 
   const yubaEnabled = enabledTasks.some(item => item.type === 'yubaCheckIn')
@@ -783,8 +797,8 @@ export function buildDailyReportCard(
     elements.push({ tag: 'markdown', content: lines.join('\n') })
   }
 
-  // 异常明细：全成功或整天没跑时省略，避免刷屏
-  if (!nothingRan && (failCount > 0 || missingCount > 0)) {
+  // 异常明细：全成功时省略；未执行的任务名要露出来，否则 headline 只有数字
+  if (failCount > 0 || missingCount > 0) {
     const lines: string[] = []
     for (const item of failedTasks) {
       const record = runs[item.type]!
@@ -794,6 +808,12 @@ export function buildDailyReportCard(
       lines.push(`⚪ ${getTaskLabel(item.type)}：<font color='grey'>未执行</font>`)
     }
     elements.push({ tag: 'markdown', content: lines.join('\n') })
+  }
+
+  // 待执行：今天还有没到点的计划，不算异常，单独一行
+  if (pendingCount > 0) {
+    const labels = pendingTasks.map(item => getTaskLabel(item.type)).join('、')
+    elements.push({ tag: 'markdown', content: `⏳ <font color='orange'>待执行</font>：${labels}（今日尚未到点）` })
   }
 
   elements.push({ tag: 'markdown', content: healthLine })
@@ -818,7 +838,10 @@ export function buildDailyReportCard(
     headlineText,
     ...giftText,
     ...failedTasks.map(item => `❌ ${getTaskLabel(item.type)}：${runs[item.type]!.error || '未知错误'}`),
-    ...(nothingRan ? [] : missingTasks.map(item => `⚪ ${getTaskLabel(item.type)}：未执行`)),
+    ...missingTasks.map(item => `⚪ ${getTaskLabel(item.type)}：未执行`),
+    ...(pendingCount > 0
+      ? [`⏳ 待执行：${pendingTasks.map(item => getTaskLabel(item.type)).join('、')}（今日尚未到点）`]
+      : []),
     healthText,
   ].join('\n')
 
@@ -826,11 +849,17 @@ export function buildDailyReportCard(
     || Boolean(cookieStatus && (cookieStatus.error || !cookieStatus.ltp0Present || !cookieStatus.mainReady))
 
   const tags: CardTag[] = []
-  if (nothingRan) {
-    tags.push({ text: '⚪ 无执行记录', color: 'grey' })
+  if (allPending) {
+    tags.push({ text: '⏳ 稍后执行', color: 'orange' })
+  } else if (nothingRan) {
+    tags.push(missingCount > 0 && pendingCount > 0
+      ? { text: `⚪ 未执行 ${missingCount} · ⏳ 待执行 ${pendingCount}`, color: 'grey' }
+      : { text: '⚪ 无执行记录', color: 'grey' })
   } else if (failCount > 0) {
     tags.push({ text: `❌ ${failCount} 个失败`, color: 'red' })
-  } else if (missingCount > 0 && !nothingRan) {
+  } else if (pendingCount > 0) {
+    tags.push({ text: `⏳ ${pendingCount} 个待执行`, color: 'orange' })
+  } else if (missingCount > 0) {
     tags.push({ text: `⚪ ${missingCount} 个未执行`, color: 'grey' })
   } else if (total > 0) {
     tags.push({ text: '✅ 全部正常', color: 'green' })
